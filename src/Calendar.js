@@ -67,7 +67,7 @@ function Calendar() {
   };
 
   const [shiftGroup, setShiftGroup] = useState(3);
-  const [customShifts, setCustomShifts] = useState({});
+  const [customShifts] = useState({});
 
   const handleShiftEdit = (dateStr) => {
     setSelectedDate(dateStr);
