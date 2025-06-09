@@ -43,7 +43,7 @@ const getShiftForDate = (date, shiftGroup) => {
 const Calendar = () => {
   const [currentMonth, setCurrentMonth] = useState(new Date(2025, 5));
   const [shiftGroup, setShiftGroup] = useState(3);
-  const [customShifts] = useState({});
+  const [customShifts, setCustomShifts] = useState({});
   const [comments, setComments] = useState(() => {
     const saved = localStorage.getItem("shiftComments");
     return saved ? JSON.parse(saved) : {};
@@ -66,10 +66,12 @@ const Calendar = () => {
   };
 
   const renderHeader = () => (
-    <div className="flex justify-between items-center mb-4">
-      <button onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}>&lt;</button>
-      <h2 className="text-xl font-bold">{format(currentMonth, "MMMM yyyy")}</h2>
-      <button onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}>&gt;</button>
+    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 mb-4">
+      <div className="flex justify-between items-center">
+        <button onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}>&lt;</button>
+        <h2 className="text-xl font-bold mx-4">{format(currentMonth, "MMMM yyyy")}</h2>
+        <button onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}>&gt;</button>
+      </div>
     </div>
   );
 
@@ -90,7 +92,7 @@ const Calendar = () => {
   );
 
   const renderDays = () => (
-    <div className="grid grid-cols-7 text-center font-bold mb-2">
+    <div className="grid grid-cols-7 text-center font-bold mb-2 text-sm sm:text-base">
       {["Man", "Tir", "Ons", "Tor", "Fre", "Lør", "Søn"].map((day) => (
         <div key={day}>{day}</div>
       ))}
@@ -127,8 +129,8 @@ const Calendar = () => {
         days.push(
           <div
             key={dateStr}
-            className={`border h-24 p-2 text-base text-center cursor-pointer rounded-2xl shadow-md transition-all duration-200 transform hover:scale-105 ${getShiftColor(shift)}`}
-           onClick={() => handleShiftEdit(dateStr)}
+            className={`border h-20 sm:h-24 p-1 sm:p-2 text-xs sm:text-base text-center cursor-pointer rounded-xl shadow-sm transition-transform duration-200 hover:scale-105 ${getShiftColor(shift)}`}
+            onClick={() => isSameMonth(day, monthStart) && handleShiftEdit(dateStr)}
           >
             <div className="font-semibold">{format(day, "d")}</div>
             <div>{shift}</div>
@@ -140,25 +142,25 @@ const Calendar = () => {
         day = addDays(day, 1);
       }
       rows.push(
-        <div className="grid grid-cols-7" key={day}>
+        <div className="grid grid-cols-7 gap-1" key={day}>
           {days}
         </div>
       );
       days = [];
     }
-    return <div>{rows}</div>;
+    return <div className="space-y-1 sm:space-y-2">{rows}</div>;
   };
 
   return (
-    <div className="p-4 max-w-4xl mx-auto">
+    <div className="p-2 sm:p-4 max-w-5xl mx-auto">
       {renderHeader()}
       {renderShiftSelector()}
       {renderDays()}
       {renderCells()}
 
       {showCommentBox && (
-        <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
-          <div className="bg-white p-4 rounded-xl shadow-lg w-96">
+        <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-[9999]">
+          <div className="bg-white p-4 rounded-xl shadow-lg w-[90%] max-w-md">
             <h2 className="text-lg font-bold mb-2">Kommentar for {selectedKey}</h2>
             <textarea
               className="w-full h-24 p-2 border rounded"
