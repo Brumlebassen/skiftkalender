@@ -43,7 +43,7 @@ const getShiftForDate = (date, shiftGroup) => {
 const Calendar = () => {
   const [currentMonth, setCurrentMonth] = useState(new Date(2025, 5));
   const [shiftGroup, setShiftGroup] = useState(3);
-  const [customShifts,] = useState({});
+  const [customShifts] = useState({});
   const [comments, setComments] = useState(() => {
     const saved = localStorage.getItem("shiftComments");
     return saved ? JSON.parse(saved) : {};
