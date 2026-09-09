@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   StyleSheet,
   View,
@@ -7,9 +7,9 @@ import {
   Modal,
   TextInput,
   ScrollView,
-  Dimensions,
   KeyboardAvoidingView,
   Platform,
+  PanResponder,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
@@ -22,8 +22,11 @@ import {
   isSameMonth,
   isSameDay,
   differenceInCalendarDays,
+  getISOWeek,
 } from "date-fns";
 import { nb } from "date-fns/locale";
+import { getTheme, getShiftColor } from "./theme";
+import SettingsModal, { DEFAULT_SHIFT_TIMES } from "./SettingsModal";
 
 const baseRotasjon = [
   "Fm", "Fm", "Fm", "Fm", "Fri", "Fri", "Fri",
@@ -55,52 +58,61 @@ const getShiftForDate = (date, shiftGroup) => {
   return rotasjon[index];
 };
 
-const getShiftColor = (shift) => {
-  switch (shift) {
-    case "Fm":
-      return { bg: "#bbf7d0", text: "#14532d", border: "#86efac" };
-    case "Em":
-      return { bg: "#fef08a", text: "#713f12", border: "#fde047" };
-    case "N":
-      return { bg: "#bae6fd", text: "#0369a1", border: "#7dd3fc" };
-    case "12tFm":
-      return { bg: "#22c55e", text: "#ffffff", border: "#16a34a" };
-    case "12tN":
-      return { bg: "#2563eb", text: "#ffffff", border: "#1d4ed8" };
-    case "Fri":
-      return { bg: "#f1f5f9", text: "#64748b", border: "#e2e8f0" };
-    default:
-      return { bg: "#ffffff", text: "#1e293b", border: "#e2e8f0" };
-  }
-};
-
 const SHIFT_COMMENTS_KEY = "@shiftComments";
 const SELECTED_SHIFT_KEY = "@selectedShiftGroup";
+const SHIFT_OVERRIDES_KEY = "@shiftOverrides";
+const SHIFT_TIMES_KEY = "@shiftTimes";
+const COMPARE_SHIFTS_KEY = "@compareShifts";
 
-const Calendar = () => {
+const ALL_SHIFTS = ["Fm", "Em", "N", "12tFm", "12tN", "Fri"];
+
+const Calendar = ({ isDark, toggleTheme }) => {
+  const theme = getTheme(isDark);
+
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [shiftGroup, setShiftGroup] = useState(3);
   const [comments, setComments] = useState({});
-  const [selectedKey, setSelectedKey] = useState(null);
-  const [selectedDateFormatted, setSelectedDateFormatted] = useState("");
-  const [selectedShiftName, setSelectedShiftName] = useState("");
+  const [overrides, setOverrides] = useState({});
+  const [shiftTimes, setShiftTimes] = useState(DEFAULT_SHIFT_TIMES);
+
+  // Samanlikningsmodus
+  const [isCompareMode, setIsCompareMode] = useState(false);
+  const [compareGroups, setCompareGroups] = useState([3, 1]);
+
+  // Modaler
+  const [showSettings, setShowSettings] = useState(false);
+  const [showDayModal, setShowDayModal] = useState(false);
+
+  // Dag-modal tilstand
+  const [activeDate, setActiveDate] = useState(null);
+  const [originalShift, setOriginalShift] = useState("");
+  const [chosenShiftOverride, setChosenShiftOverride] = useState(null);
+  const [isOvertid, setIsOvertid] = useState(false);
   const [commentText, setCommentText] = useState("");
-  const [showCommentBox, setShowCommentBox] = useState(false);
 
   // Last lagrede data ved oppstart
   useEffect(() => {
     const loadSavedData = async () => {
       try {
-        const [savedComments, savedGroup] = await Promise.all([
+        const [
+          savedComments,
+          savedGroup,
+          savedOverrides,
+          savedTimes,
+          savedCompare,
+        ] = await Promise.all([
           AsyncStorage.getItem(SHIFT_COMMENTS_KEY),
           AsyncStorage.getItem(SELECTED_SHIFT_KEY),
+          AsyncStorage.getItem(SHIFT_OVERRIDES_KEY),
+          AsyncStorage.getItem(SHIFT_TIMES_KEY),
+          AsyncStorage.getItem(COMPARE_SHIFTS_KEY),
         ]);
-        if (savedComments) {
-          setComments(JSON.parse(savedComments));
-        }
-        if (savedGroup) {
-          setShiftGroup(Number(savedGroup));
-        }
+
+        if (savedComments) setComments(JSON.parse(savedComments));
+        if (savedGroup) setShiftGroup(Number(savedGroup));
+        if (savedOverrides) setOverrides(JSON.parse(savedOverrides));
+        if (savedTimes) setShiftTimes(JSON.parse(savedTimes));
+        if (savedCompare) setCompareGroups(JSON.parse(savedCompare));
       } catch (err) {
         console.warn("Kunne ikke laste lagrede data:", err);
       }
@@ -108,69 +120,152 @@ const Calendar = () => {
     loadSavedData();
   }, []);
 
+  // PanResponder for sveiping mellom måneder (swipe gestures)
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        // Fang opp horisontal sveip som er tydelig større enn vertikal bevegelse
+        return (
+          Math.abs(gestureState.dx) > 35 &&
+          Math.abs(gestureState.dy) < Math.abs(gestureState.dx) * 0.8
+        );
+      },
+      onPanResponderRelease: (evt, gestureState) => {
+        if (gestureState.dx < -50) {
+          // Sveip venstre -> neste måned
+          setCurrentMonth((prev) => addMonths(prev, 1));
+        } else if (gestureState.dx > 50) {
+          // Sveip høyre -> førre måned
+          setCurrentMonth((prev) => subMonths(prev, 1));
+        }
+      },
+    })
+  ).current;
+
+  // Skiftvalg
   const handleSelectShiftGroup = async (num) => {
     setShiftGroup(num);
     try {
       await AsyncStorage.setItem(SELECTED_SHIFT_KEY, num.toString());
     } catch (err) {
-      console.warn("Kunne ikke lagre valgt skiftgruppe:", err);
+      console.warn("Feil ved lagring av skiftgruppe:", err);
     }
   };
 
-  const handleDayPress = (day, shift) => {
-    const dateStr = format(day, "yyyy-MM-dd");
-    const key = `${shiftGroup}-${dateStr}`;
-    setSelectedKey(key);
-    setSelectedDateFormatted(
-      format(day, "EEEE d. MMMM yyyy", { locale: nb })
-    );
-    setSelectedShiftName(shift || "Fri");
-    setCommentText(comments[key] || "");
-    setShowCommentBox(true);
-  };
-
-  const handleSaveComment = async () => {
-    if (!selectedKey) return;
-    const trimmed = commentText.trim();
-    const updated = { ...comments };
-    if (trimmed) {
-      updated[selectedKey] = trimmed;
+  // Toggle skift i samanlikningsmodus
+  const handleToggleCompareGroup = async (num) => {
+    let next;
+    if (compareGroups.includes(num)) {
+      if (compareGroups.length === 1) return; // Må ha minst éin
+      next = compareGroups.filter((g) => g !== num);
     } else {
-      delete updated[selectedKey];
+      next = [...compareGroups, num].sort();
     }
-    setComments(updated);
-    setShowCommentBox(false);
-
+    setCompareGroups(next);
     try {
-      await AsyncStorage.setItem(SHIFT_COMMENTS_KEY, JSON.stringify(updated));
+      await AsyncStorage.setItem(COMPARE_SHIFTS_KEY, JSON.stringify(next));
     } catch (err) {
-      console.warn("Kunne ikke lagre kommentar:", err);
+      console.warn("Feil ved lagring av compare groups:", err);
     }
   };
 
-  const handleDeleteComment = async () => {
-    if (!selectedKey) return;
-    const updated = { ...comments };
-    delete updated[selectedKey];
-    setComments(updated);
-    setShowCommentBox(false);
+  // Åpne dag-modal
+  const handleDayPress = (day, defShift, dateKey) => {
+    setActiveDate(day);
+    setOriginalShift(defShift);
+
+    const existingOverride = overrides[dateKey];
+    if (existingOverride) {
+      setChosenShiftOverride(existingOverride.shift || null);
+      setIsOvertid(Boolean(existingOverride.isOvertid));
+    } else {
+      setChosenShiftOverride(null);
+      setIsOvertid(false);
+    }
+
+    setCommentText(comments[dateKey] || "");
+    setShowDayModal(true);
+  };
+
+  // Lagre dag (vaktbytte, overtid, kommentar)
+  const handleSaveDay = async () => {
+    if (!activeDate) return;
+    const dateKey = `${shiftGroup}-${format(activeDate, "yyyy-MM-dd")}`;
+
+    // 1. Håndter overstyring / overtid
+    const updatedOverrides = { ...overrides };
+    if (chosenShiftOverride || isOvertid) {
+      updatedOverrides[dateKey] = {
+        shift: chosenShiftOverride || originalShift,
+        isOvertid: Boolean(isOvertid),
+      };
+    } else {
+      delete updatedOverrides[dateKey];
+    }
+    setOverrides(updatedOverrides);
+
+    // 2. Håndter kommentar
+    const trimmed = commentText.trim();
+    const updatedComments = { ...comments };
+    if (trimmed) {
+      updatedComments[dateKey] = trimmed;
+    } else {
+      delete updatedComments[dateKey];
+    }
+    setComments(updatedComments);
+
+    setShowDayModal(false);
 
     try {
-      await AsyncStorage.setItem(SHIFT_COMMENTS_KEY, JSON.stringify(updated));
+      await Promise.all([
+        AsyncStorage.setItem(SHIFT_OVERRIDES_KEY, JSON.stringify(updatedOverrides)),
+        AsyncStorage.setItem(SHIFT_COMMENTS_KEY, JSON.stringify(updatedComments)),
+      ]);
     } catch (err) {
-      console.warn("Kunne ikke slette kommentar:", err);
+      console.warn("Feil ved lagring:", err);
     }
   };
 
-  const handleGoToToday = () => {
-    setCurrentMonth(new Date());
+  // Tilbakestill dag til standard
+  const handleResetDay = async () => {
+    if (!activeDate) return;
+    const dateKey = `${shiftGroup}-${format(activeDate, "yyyy-MM-dd")}`;
+
+    const updatedOverrides = { ...overrides };
+    delete updatedOverrides[dateKey];
+    setOverrides(updatedOverrides);
+
+    const updatedComments = { ...comments };
+    delete updatedComments[dateKey];
+    setComments(updatedComments);
+
+    setShowDayModal(false);
+
+    try {
+      await Promise.all([
+        AsyncStorage.setItem(SHIFT_OVERRIDES_KEY, JSON.stringify(updatedOverrides)),
+        AsyncStorage.setItem(SHIFT_COMMENTS_KEY, JSON.stringify(updatedComments)),
+      ]);
+    } catch (err) {
+      console.warn("Feil ved sletting:", err);
+    }
+  };
+
+  // Lagre skifttider
+  const handleSaveShiftTimes = async (newTimes) => {
+    setShiftTimes(newTimes);
+    try {
+      await AsyncStorage.setItem(SHIFT_TIMES_KEY, JSON.stringify(newTimes));
+    } catch (err) {
+      console.warn("Feil ved lagring av skifttider:", err);
+    }
   };
 
   const monthTitle = format(currentMonth, "MMMM yyyy", { locale: nb });
   const formattedMonthTitle =
     monthTitle.charAt(0).toUpperCase() + monthTitle.slice(1);
 
-  // Rutenett
+  // Rutenett og ukenummer
   const monthStart = startOfMonth(currentMonth);
   const startDate = startOfWeek(monthStart, { weekStartsOn: 1 });
   const today = new Date();
@@ -182,271 +277,568 @@ const Calendar = () => {
     dayIterator = addDays(dayIterator, 1);
   }
 
-  // Gruppér i uker (6 uker x 7 dager)
   const weeks = [];
   for (let i = 0; i < 42; i += 7) {
-    weeks.push(daysGrid.slice(i, i + 7));
+    const weekDays = daysGrid.slice(i, i + 7);
+    // Bruker ISO-vekenummer fra første dag i uka (mandag)
+    const weekNumber = getISOWeek(weekDays[0]);
+    weeks.push({ weekNumber, days: weekDays });
   }
 
+  // Bestem aktiv vakt og tidsinfo i modal
+  const currentModalShift = chosenShiftOverride || originalShift;
+  const currentModalTime = shiftTimes[currentModalShift] || "";
+
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.contentContainer}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Skiftvelger fane */}
-      <View style={styles.selectorCard}>
-        <Text style={styles.selectorTitle}>Velg skiftgruppe:</Text>
-        <View style={styles.shiftButtonGroup}>
-          {[1, 2, 3, 4, 5].map((num) => {
-            const isSelected = shiftGroup === num;
-            return (
-              <TouchableOpacity
-                key={num}
-                style={[
-                  styles.shiftButton,
-                  isSelected && styles.shiftButtonActive,
-                ]}
-                onPress={() => handleSelectShiftGroup(num)}
-                activeOpacity={0.7}
-              >
-                <Text
-                  style={[
-                    styles.shiftButtonText,
-                    isSelected && styles.shiftButtonTextActive,
-                  ]}
-                >
-                  Skift {num}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+    <View style={[styles.mainWrapper, { backgroundColor: theme.bg }]}>
+      {/* Topp-verktøylinje: Tema-knapp, Samanlikn-knapp, Innstillingar */}
+      <View style={[styles.topBar, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}>
+        <View style={styles.topBarLeft}>
+          <TouchableOpacity
+            style={[
+              styles.modeButton,
+              isCompareMode && { backgroundColor: theme.activeButtonBg },
+              !isCompareMode && { backgroundColor: theme.inactiveButtonBg },
+            ]}
+            onPress={() => setIsCompareMode(!isCompareMode)}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.modeButtonText,
+                { color: isCompareMode ? theme.activeButtonText : theme.inactiveButtonText },
+              ]}
+            >
+              👥 {isCompareMode ? "Samanliknar" : "Samanlikn skift"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.topBarRight}>
+          <TouchableOpacity
+            style={[styles.iconButton, { backgroundColor: theme.navButtonBg }]}
+            onPress={() => setShowSettings(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.iconButtonText}>⚙️</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.iconButton, { backgroundColor: theme.navButtonBg }]}
+            onPress={toggleTheme}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.iconButtonText}>{isDark ? "☀️" : "🌙"}</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
-      {/* Måneds-navigator */}
-      <View style={styles.headerContainer}>
-        <TouchableOpacity
-          style={styles.navButton}
-          onPress={() => setCurrentMonth(subMonths(currentMonth, 1))}
-          activeOpacity={0.6}
-        >
-          <Text style={styles.navButtonText}>‹</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity onPress={handleGoToToday} activeOpacity={0.7}>
-          <Text style={styles.monthTitle}>{formattedMonthTitle}</Text>
-          <Text style={styles.todayHint}>Trykk for å gå til i dag</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navButton}
-          onPress={() => setCurrentMonth(addMonths(currentMonth, 1))}
-          activeOpacity={0.6}
-        >
-          <Text style={styles.navButtonText}>›</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Ukedager */}
-      <View style={styles.weekDaysRow}>
-        {["Man", "Tir", "Ons", "Tor", "Fre", "Lør", "Søn"].map((dayName, idx) => (
-          <View key={dayName} style={styles.weekDayCell}>
-            <Text
-              style={[
-                styles.weekDayText,
-                (idx === 5 || idx === 6) && styles.weekEndText,
-              ]}
-            >
-              {dayName}
-            </Text>
-          </View>
-        ))}
-      </View>
-
-      {/* Kalenderrutenett */}
-      <View style={styles.gridContainer}>
-        {weeks.map((week, weekIdx) => (
-          <View key={weekIdx} style={styles.weekRow}>
-            {week.map((d) => {
-              const inCurrentMonth = isSameMonth(d, monthStart);
-              const dateStr = format(d, "yyyy-MM-dd");
-              const key = `${shiftGroup}-${dateStr}`;
-              const shift = inCurrentMonth ? getShiftForDate(d, shiftGroup) : "";
-              const colorInfo = getShiftColor(shift);
-              const isCurrentDay = isSameDay(d, today);
-              const hasComment = Boolean(comments[key]);
-
-              if (!inCurrentMonth) {
-                return (
-                  <View
-                    key={dateStr}
-                    style={[styles.dayCell, styles.dayCellOutside]}
-                  >
-                    <Text style={styles.dayNumberOutside}>
-                      {format(d, "d")}
-                    </Text>
-                  </View>
-                );
-              }
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Skiftvelger */}
+        <View style={[styles.selectorCard, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}>
+          <Text style={[styles.selectorTitle, { color: theme.textMuted }]}>
+            {isCompareMode
+              ? "Vel skift å samanlikne (trykk på fleire):"
+              : "Vel skiftgruppe:"}
+          </Text>
+          <View style={styles.shiftButtonGroup}>
+            {[1, 2, 3, 4, 5].map((num) => {
+              const isSelected = isCompareMode
+                ? compareGroups.includes(num)
+                : shiftGroup === num;
 
               return (
                 <TouchableOpacity
-                  key={dateStr}
+                  key={num}
                   style={[
-                    styles.dayCell,
-                    {
-                      backgroundColor: colorInfo.bg,
-                      borderColor: colorInfo.border,
-                    },
-                    isCurrentDay && styles.todayCellBorder,
+                    styles.shiftButton,
+                    { backgroundColor: theme.inactiveButtonBg },
+                    isSelected && { backgroundColor: theme.activeButtonBg },
                   ]}
-                  onPress={() => handleDayPress(d, shift)}
+                  onPress={() =>
+                    isCompareMode
+                      ? handleToggleCompareGroup(num)
+                      : handleSelectShiftGroup(num)
+                  }
                   activeOpacity={0.7}
                 >
-                  <View style={styles.dayHeader}>
-                    <View
-                      style={[
-                        styles.dayNumberContainer,
-                        isCurrentDay && styles.todayNumberContainer,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.dayNumberText,
-                          isCurrentDay && styles.todayNumberText,
-                        ]}
-                      >
-                        {format(d, "d")}
-                      </Text>
-                    </View>
-                    {hasComment && (
-                      <Text style={styles.commentIndicator}>📝</Text>
-                    )}
-                  </View>
-
                   <Text
-                    style={[styles.shiftText, { color: colorInfo.text }]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
+                    style={[
+                      styles.shiftButtonText,
+                      { color: isSelected ? theme.activeButtonText : theme.inactiveButtonText },
+                    ]}
                   >
-                    {shift}
+                    Skift {num}
                   </Text>
                 </TouchableOpacity>
               );
             })}
           </View>
-        ))}
-      </View>
-
-      {/* Forklaring / fargeforklaring */}
-      <View style={styles.legendContainer}>
-        <Text style={styles.legendTitle}>Skiftfarger</Text>
-        <View style={styles.legendGrid}>
-          {[
-            { label: "Fm (Formiddag)", shift: "Fm" },
-            { label: "Em (Ettermiddag)", shift: "Em" },
-            { label: "N (Natt)", shift: "N" },
-            { label: "12tFm (12t Formiddag)", shift: "12tFm" },
-            { label: "12tN (12t Natt)", shift: "12tN" },
-            { label: "Fri", shift: "Fri" },
-          ].map((item) => {
-            const c = getShiftColor(item.shift);
-            return (
-              <View key={item.shift} style={styles.legendItem}>
-                <View
-                  style={[
-                    styles.legendColorBox,
-                    { backgroundColor: c.bg, borderColor: c.border },
-                  ]}
-                />
-                <Text style={styles.legendText}>{item.label}</Text>
-              </View>
-            );
-          })}
         </View>
-      </View>
 
-      {/* Modal for å legge inn kommentar/notat */}
+        {/* Måneds-navigator med sveipe-tips */}
+        <View style={[styles.headerContainer, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}>
+          <TouchableOpacity
+            style={[styles.navButton, { backgroundColor: theme.navButtonBg }]}
+            onPress={() => setCurrentMonth(subMonths(currentMonth, 1))}
+            activeOpacity={0.6}
+          >
+            <Text style={[styles.navButtonText, { color: theme.navButtonText }]}>‹</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => setCurrentMonth(new Date())} activeOpacity={0.7}>
+            <Text style={[styles.monthTitle, { color: theme.textPrimary }]}>{formattedMonthTitle}</Text>
+            <Text style={[styles.todayHint, { color: theme.textMuted }]}>
+              Trykk for «I dag» • Sveip for å bla
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.navButton, { backgroundColor: theme.navButtonBg }]}
+            onPress={() => setCurrentMonth(addMonths(currentMonth, 1))}
+            activeOpacity={0.6}
+          >
+            <Text style={[styles.navButtonText, { color: theme.navButtonText }]}>›</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Ukedags-overskrift (med Uke-kolonne) */}
+        <View style={styles.weekDaysRow}>
+          <View style={styles.weekNumberHeaderCell}>
+            <Text style={[styles.weekNumberHeaderText, { color: theme.weekHeaderColor }]}>
+              Uke
+            </Text>
+          </View>
+          {["Man", "Tir", "Ons", "Tor", "Fre", "Lør", "Søn"].map((dayName, idx) => (
+            <View key={dayName} style={styles.weekDayCell}>
+              <Text
+                style={[
+                  styles.weekDayText,
+                  { color: theme.weekHeaderColor },
+                  (idx === 5 || idx === 6) && { color: theme.weekEndColor },
+                ]}
+              >
+                {dayName}
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Kalenderrutenett med PanResponder for sveiping */}
+        <View
+          style={[styles.gridContainer, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}
+          {...panResponder.panHandlers}
+        >
+          {weeks.map(({ weekNumber, days }, weekIdx) => (
+            <View key={weekIdx} style={styles.weekRow}>
+              {/* Ukenummer-celle */}
+              <View style={[styles.weekNumberCell, { backgroundColor: theme.weekNumberBg }]}>
+                <Text style={[styles.weekNumberText, { color: theme.weekNumberText }]}>
+                  {weekNumber}
+                </Text>
+              </View>
+
+              {/* Dags-celler */}
+              {days.map((d) => {
+                const inCurrentMonth = isSameMonth(d, monthStart);
+                const dateStr = format(d, "yyyy-MM-dd");
+                const dateKey = `${shiftGroup}-${dateStr}`;
+                const isCurrentDay = isSameDay(d, today);
+                const hasComment = Boolean(comments[dateKey]);
+
+                if (!inCurrentMonth) {
+                  return (
+                    <View
+                      key={dateStr}
+                      style={[styles.dayCell, { backgroundColor: theme.outsideCellBg, borderColor: "transparent" }]}
+                    >
+                      <Text style={[styles.dayNumberOutside, { color: theme.outsideCellText }]}>
+                        {format(d, "d")}
+                      </Text>
+                    </View>
+                  );
+                }
+
+                // Håndtering i samanlikningsmodus
+                if (isCompareMode) {
+                  return (
+                    <View
+                      key={dateStr}
+                      style={[
+                        styles.dayCell,
+                        styles.compareDayCell,
+                        { backgroundColor: theme.cardBg, borderColor: theme.cardBorder },
+                        isCurrentDay && { borderColor: theme.todayBorder, borderWidth: 2 },
+                      ]}
+                    >
+                      <View style={styles.dayHeader}>
+                        <View
+                          style={[
+                            styles.dayNumberContainer,
+                            isCurrentDay && { backgroundColor: theme.todayBorder },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.dayNumberText,
+                              { color: isCurrentDay ? "#ffffff" : theme.textPrimary },
+                            ]}
+                          >
+                            {format(d, "d")}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Vis skiftene for de valgte gruppene */}
+                      <View style={styles.compareShiftsList}>
+                        {compareGroups.map((grp) => {
+                          const s = getShiftForDate(d, grp);
+                          const sc = getShiftColor(s, isDark);
+                          return (
+                            <View
+                              key={grp}
+                              style={[
+                                styles.compareShiftPill,
+                                { backgroundColor: sc.bg, borderColor: sc.border },
+                              ]}
+                            >
+                              <Text
+                                style={[styles.compareShiftPillText, { color: sc.text }]}
+                                numberOfLines={1}
+                              >
+                                S{grp}: {s}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  );
+                }
+
+                // Standard enkelt-skift visning
+                const rawShift = getShiftForDate(d, shiftGroup);
+                const override = overrides[dateKey];
+                const activeShift = override?.shift || rawShift;
+                const isOT = Boolean(override?.isOvertid);
+                const colorInfo = getShiftColor(activeShift, isDark);
+
+                return (
+                  <TouchableOpacity
+                    key={dateStr}
+                    style={[
+                      styles.dayCell,
+                      {
+                        backgroundColor: colorInfo.bg,
+                        borderColor: colorInfo.border,
+                      },
+                      isCurrentDay && { borderColor: theme.todayBorder, borderWidth: 2 },
+                    ]}
+                    onPress={() => handleDayPress(d, rawShift, dateKey)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.dayHeader}>
+                      <View
+                        style={[
+                          styles.dayNumberContainer,
+                          isCurrentDay && { backgroundColor: theme.todayBorder },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.dayNumberText,
+                            { color: isCurrentDay ? "#ffffff" : colorInfo.text },
+                          ]}
+                        >
+                          {format(d, "d")}
+                        </Text>
+                      </View>
+                      <View style={styles.badgeRow}>
+                        {isOT && (
+                          <View
+                            style={[
+                              styles.otBadge,
+                              { backgroundColor: theme.overtidBadgeBg },
+                            ]}
+                          >
+                            <Text style={styles.otBadgeText}>OT</Text>
+                          </View>
+                        )}
+                        {hasComment && (
+                          <Text style={styles.commentIndicator}>📝</Text>
+                        )}
+                      </View>
+                    </View>
+
+                    <Text
+                      style={[styles.shiftText, { color: colorInfo.text }]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                    >
+                      {activeShift}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ))}
+        </View>
+
+        {/* Fargeforklaring med skifttider */}
+        <View style={[styles.legendContainer, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}>
+          <Text style={[styles.legendTitle, { color: theme.textSecondary }]}>
+            Skift og arbeidstider
+          </Text>
+          <View style={styles.legendGrid}>
+            {[
+              { label: "Fm (Formiddag)", shift: "Fm" },
+              { label: "Em (Ettermiddag)", shift: "Em" },
+              { label: "N (Natt)", shift: "N" },
+              { label: "12tFm (12t Formiddag)", shift: "12tFm" },
+              { label: "12tN (12t Natt)", shift: "12tN" },
+              { label: "Fri", shift: "Fri" },
+            ].map((item) => {
+              const c = getShiftColor(item.shift, isDark);
+              const time = shiftTimes[item.shift] || "";
+              return (
+                <View key={item.shift} style={styles.legendItem}>
+                  <View
+                    style={[
+                      styles.legendColorBox,
+                      { backgroundColor: c.bg, borderColor: c.border },
+                    ]}
+                  />
+                  <View style={styles.legendTextContainer}>
+                    <Text style={[styles.legendText, { color: theme.textPrimary }]}>
+                      {item.label}
+                    </Text>
+                    {time ? (
+                      <Text style={[styles.legendTimeText, { color: theme.textMuted }]}>
+                        {time}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      </ScrollView>
+
+      {/* Innstillings-modal for klokkeslett */}
+      <SettingsModal
+        visible={showSettings}
+        onClose={() => setShowSettings(false)}
+        shiftTimes={shiftTimes}
+        onSaveShiftTimes={handleSaveShiftTimes}
+        theme={theme}
+      />
+
+      {/* Dag-modal for vaktbytte, overtid og notater */}
       <Modal
-        visible={showCommentBox}
+        visible={showDayModal}
         transparent
         animationType="fade"
-        onRequestClose={() => setShowCommentBox(false)}
+        onRequestClose={() => setShowDayModal(false)}
       >
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : "height"}
-          style={styles.modalOverlay}
+          style={[styles.modalOverlay, { backgroundColor: theme.modalOverlay }]}
         >
-          <View style={styles.modalCard}>
-            <Text style={styles.modalDate}>{selectedDateFormatted}</Text>
-            <View style={styles.modalShiftBadge}>
-              <Text style={styles.modalShiftBadgeText}>
-                Skift: {selectedShiftName} (Gruppe {shiftGroup})
+          <View style={[styles.modalCard, { backgroundColor: theme.cardBg }]}>
+            <Text style={[styles.modalDate, { color: theme.textPrimary }]}>
+              {activeDate
+                ? format(activeDate, "EEEE d. MMMM yyyy", { locale: nb })
+                : ""}
+            </Text>
+
+            {/* Skift-info og arbeidstid */}
+            <View style={styles.modalInfoBox}>
+              <Text style={[styles.modalOriginalShiftText, { color: theme.textSecondary }]}>
+                Opphavleg vakt:{" "}
+                <Text style={{ fontWeight: "bold", color: theme.textPrimary }}>
+                  {originalShift}
+                </Text>{" "}
+                (Gruppe {shiftGroup})
               </Text>
+              {currentModalTime ? (
+                <Text style={[styles.modalTimeText, { color: theme.textMuted }]}>
+                  ⏰ Arbeidstid: {currentModalTime}
+                </Text>
+              ) : null}
             </View>
 
-            <Text style={styles.modalInputLabel}>Notat for denne dagen:</Text>
+            {/* Vaktbytte seksjon */}
+            <Text style={[styles.modalSectionTitle, { color: theme.textSecondary }]}>
+              Vaktbytte (velg vakt om du har bytta):
+            </Text>
+            <View style={styles.shiftOverrideRow}>
+              {ALL_SHIFTS.map((s) => {
+                const isSelected = chosenShiftOverride === s;
+                const sc = getShiftColor(s, isDark);
+                return (
+                  <TouchableOpacity
+                    key={s}
+                    style={[
+                      styles.shiftOverrideChip,
+                      { backgroundColor: sc.bg, borderColor: sc.border },
+                      isSelected && styles.shiftOverrideChipSelected,
+                    ]}
+                    onPress={() =>
+                      setChosenShiftOverride(isSelected ? null : s)
+                    }
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.shiftOverrideChipText,
+                        { color: sc.text },
+                        isSelected && { fontWeight: "900" },
+                      ]}
+                    >
+                      {s}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Overtid / ekstravakt avkryssing */}
+            <TouchableOpacity
+              style={[
+                styles.overtidToggleRow,
+                { backgroundColor: theme.inactiveButtonBg },
+                isOvertid && { backgroundColor: theme.overtidBadgeBg },
+              ]}
+              onPress={() => setIsOvertid(!isOvertid)}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.overtidToggleText,
+                  { color: isOvertid ? "#ffffff" : theme.textPrimary },
+                ]}
+              >
+                {isOvertid ? "✓ Merka som overtid / ekstravakt" : "+ Merk som overtid / ekstravakt"}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Notat input */}
+            <Text style={[styles.modalSectionTitle, { color: theme.textSecondary }]}>
+              Notat for denne dagen:
+            </Text>
             <TextInput
-              style={styles.modalInput}
+              style={[
+                styles.modalInput,
+                {
+                  backgroundColor: theme.inputBg,
+                  borderColor: theme.inputBorder,
+                  color: theme.inputText,
+                },
+              ]}
               value={commentText}
               onChangeText={setCommentText}
-              placeholder="F.eks. byttet vakt, overtid, ferie..."
-              placeholderTextColor="#94a3b8"
+              placeholder="F.eks. bytta med Arne, 2t overtid etter vakt..."
+              placeholderTextColor={theme.textMuted}
               multiline
-              numberOfLines={4}
+              numberOfLines={3}
               textAlignVertical="top"
-              autoFocus
             />
 
+            {/* Handlingsknappar */}
             <View style={styles.modalActions}>
-              {selectedKey && comments[selectedKey] && (
-                <TouchableOpacity
-                  style={styles.deleteButton}
-                  onPress={handleDeleteComment}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.deleteButtonText}>Slett</Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                style={[styles.deleteButton, { borderColor: theme.cardBorder }]}
+                onPress={handleResetDay}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.deleteButtonText}>Tilbakestill</Text>
+              </TouchableOpacity>
+
               <View style={styles.modalRightActions}>
                 <TouchableOpacity
-                  style={styles.cancelButton}
-                  onPress={() => setShowCommentBox(false)}
+                  style={[styles.cancelButton, { backgroundColor: theme.inactiveButtonBg }]}
+                  onPress={() => setShowDayModal(false)}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.cancelButtonText}>Avbryt</Text>
+                  <Text style={[styles.cancelButtonText, { color: theme.inactiveButtonText }]}>
+                    Avbryt
+                  </Text>
                 </TouchableOpacity>
+
                 <TouchableOpacity
-                  style={styles.saveButton}
-                  onPress={handleSaveComment}
+                  style={[styles.saveButton, { backgroundColor: theme.activeButtonBg }]}
+                  onPress={handleSaveDay}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.saveButtonText}>Lagre</Text>
+                  <Text style={[styles.saveButtonText, { color: theme.activeButtonText }]}>
+                    Lagre
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
-    </ScrollView>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
+  mainWrapper: {
+    flex: 1,
+  },
   container: {
     flex: 1,
-    backgroundColor: "#f8fafc",
   },
   contentContainer: {
     padding: 12,
     paddingBottom: 40,
   },
+  topBar: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  topBarLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  topBarRight: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  modeButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  modeButtonText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  iconButtonText: {
+    fontSize: 16,
+  },
   selectorCard: {
-    backgroundColor: "#ffffff",
     borderRadius: 14,
     padding: 12,
-    marginBottom: 12,
+    marginBottom: 10,
+    borderWidth: StyleSheet.hairlineWidth,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
@@ -454,9 +846,8 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   selectorTitle: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
-    color: "#64748b",
     marginBottom: 8,
     textTransform: "uppercase",
     letterSpacing: 0.5,
@@ -468,31 +859,23 @@ const styles = StyleSheet.create({
   },
   shiftButton: {
     flex: 1,
-    paddingVertical: 10,
+    paddingVertical: 9,
     borderRadius: 8,
-    backgroundColor: "#f1f5f9",
     alignItems: "center",
   },
-  shiftButtonActive: {
-    backgroundColor: "#1e3a8a",
-  },
   shiftButtonText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#334155",
-  },
-  shiftButtonTextActive: {
-    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "700",
   },
   headerContainer: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "#ffffff",
     borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    marginBottom: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    borderWidth: StyleSheet.hairlineWidth,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
@@ -500,28 +883,24 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   navButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#f1f5f9",
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     justifyContent: "center",
     alignItems: "center",
   },
   navButtonText: {
     fontSize: 24,
     fontWeight: "bold",
-    color: "#1e293b",
     marginTop: -2,
   },
   monthTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: "bold",
-    color: "#0f172a",
     textAlign: "center",
   },
   todayHint: {
     fontSize: 11,
-    color: "#64748b",
     textAlign: "center",
     marginTop: 2,
   },
@@ -530,6 +909,16 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     paddingHorizontal: 2,
   },
+  weekNumberHeaderCell: {
+    width: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 2,
+  },
+  weekNumberHeaderText: {
+    fontSize: 11,
+    fontWeight: "800",
+  },
   weekDayCell: {
     flex: 1,
     alignItems: "center",
@@ -537,16 +926,12 @@ const styles = StyleSheet.create({
   weekDayText: {
     fontSize: 12,
     fontWeight: "700",
-    color: "#64748b",
-  },
-  weekEndText: {
-    color: "#ef4444",
   },
   gridContainer: {
-    backgroundColor: "#ffffff",
     borderRadius: 14,
-    padding: 4,
-    marginBottom: 16,
+    padding: 3,
+    marginBottom: 14,
+    borderWidth: StyleSheet.hairlineWidth,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
@@ -555,25 +940,48 @@ const styles = StyleSheet.create({
   },
   weekRow: {
     flexDirection: "row",
-    marginBottom: 4,
+    marginBottom: 3,
+  },
+  weekNumberCell: {
+    width: 26,
+    height: 58,
+    borderRadius: 6,
+    marginRight: 2,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  weekNumberText: {
+    fontSize: 11,
+    fontWeight: "700",
   },
   dayCell: {
     flex: 1,
     height: 58,
     borderRadius: 8,
     borderWidth: 1,
-    marginHorizontal: 2,
-    padding: 3,
+    marginHorizontal: 1.5,
+    padding: 2.5,
     justifyContent: "space-between",
   },
-  dayCellOutside: {
-    backgroundColor: "#f8fafc",
-    borderColor: "transparent",
-    opacity: 0.35,
+  compareDayCell: {
+    padding: 2,
+    justifyContent: "flex-start",
   },
-  todayCellBorder: {
-    borderWidth: 2,
-    borderColor: "#0284c7",
+  compareShiftsList: {
+    flex: 1,
+    justifyContent: "center",
+    gap: 2,
+  },
+  compareShiftPill: {
+    borderRadius: 4,
+    paddingVertical: 1,
+    paddingHorizontal: 2,
+    borderWidth: 0.5,
+  },
+  compareShiftPillText: {
+    fontSize: 9,
+    fontWeight: "700",
+    textAlign: "center",
   },
   dayHeader: {
     flexDirection: "row",
@@ -581,41 +989,48 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   dayNumberContainer: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     justifyContent: "center",
     alignItems: "center",
-  },
-  todayNumberContainer: {
-    backgroundColor: "#0284c7",
   },
   dayNumberText: {
     fontSize: 11,
     fontWeight: "700",
-    color: "#1e293b",
-  },
-  todayNumberText: {
-    color: "#ffffff",
   },
   dayNumberOutside: {
     fontSize: 11,
-    color: "#94a3b8",
     padding: 2,
   },
+  badgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+  otBadge: {
+    paddingHorizontal: 3,
+    paddingVertical: 1,
+    borderRadius: 3,
+  },
+  otBadgeText: {
+    fontSize: 8,
+    fontWeight: "900",
+    color: "#ffffff",
+  },
   commentIndicator: {
-    fontSize: 10,
+    fontSize: 9,
   },
   shiftText: {
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "800",
     textAlign: "center",
-    marginBottom: 2,
+    marginBottom: 1,
   },
   legendContainer: {
-    backgroundColor: "#ffffff",
     borderRadius: 14,
-    padding: 14,
+    padding: 12,
+    borderWidth: StyleSheet.hairlineWidth,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
@@ -623,88 +1038,118 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   legendTitle: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "700",
-    color: "#475569",
     marginBottom: 8,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   legendGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
+    justifyContent: "space-between",
   },
   legendItem: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     width: "48%",
-    marginBottom: 4,
+    marginBottom: 8,
   },
   legendColorBox: {
-    width: 16,
-    height: 16,
+    width: 14,
+    height: 14,
     borderRadius: 4,
     borderWidth: 1,
     marginRight: 6,
+    marginTop: 2,
+  },
+  legendTextContainer: {
+    flex: 1,
   },
   legendText: {
     fontSize: 12,
-    color: "#334155",
-    fontWeight: "500",
+    fontWeight: "600",
+  },
+  legendTimeText: {
+    fontSize: 10,
+    marginTop: 1,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(15, 23, 42, 0.45)",
     justifyContent: "center",
     alignItems: "center",
-    padding: 20,
+    padding: 16,
   },
   modalCard: {
     width: "100%",
-    maxWidth: 380,
-    backgroundColor: "#ffffff",
-    borderRadius: 16,
+    maxWidth: 400,
+    borderRadius: 20,
     padding: 20,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.2,
     shadowRadius: 10,
     elevation: 6,
   },
   modalDate: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: "bold",
-    color: "#0f172a",
     textTransform: "capitalize",
-    marginBottom: 4,
+    marginBottom: 8,
   },
-  modalShiftBadge: {
-    alignSelf: "flex-start",
-    backgroundColor: "#e0f2fe",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
+  modalInfoBox: {
+    marginBottom: 12,
+  },
+  modalOriginalShiftText: {
+    fontSize: 13,
+  },
+  modalTimeText: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  modalSectionTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  shiftOverrideRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginBottom: 12,
+  },
+  shiftOverrideChip: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  shiftOverrideChipSelected: {
+    borderWidth: 2,
+    borderColor: "#0284c7",
+    transform: [{ scale: 1.05 }],
+  },
+  shiftOverrideChipText: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  overtidToggleRow: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    alignItems: "center",
     marginBottom: 14,
   },
-  modalShiftBadgeText: {
-    fontSize: 12,
-    color: "#0369a1",
-    fontWeight: "600",
-  },
-  modalInputLabel: {
+  overtidToggleText: {
     fontSize: 13,
-    fontWeight: "600",
-    color: "#475569",
-    marginBottom: 6,
+    fontWeight: "700",
   },
   modalInput: {
     borderWidth: 1,
-    borderColor: "#cbd5e1",
     borderRadius: 10,
     padding: 10,
-    fontSize: 14,
-    color: "#0f172a",
-    backgroundColor: "#f8fafc",
-    height: 90,
+    fontSize: 13,
+    height: 75,
     marginBottom: 16,
   },
   modalActions: {
@@ -715,40 +1160,35 @@ const styles = StyleSheet.create({
   modalRightActions: {
     flexDirection: "row",
     gap: 8,
-    marginLeft: "auto",
+  },
+  deleteButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  deleteButtonText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#ef4444",
   },
   cancelButton: {
-    paddingVertical: 9,
+    paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 8,
-    backgroundColor: "#e2e8f0",
   },
   cancelButtonText: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#475569",
   },
   saveButton: {
-    paddingVertical: 9,
+    paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 8,
-    backgroundColor: "#1e3a8a",
   },
   saveButtonText: {
     fontSize: 13,
-    fontWeight: "600",
-    color: "#ffffff",
-  },
-  deleteButton: {
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: "#fee2e2",
-  },
-  deleteButtonText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#dc2626",
+    fontWeight: "700",
   },
 });
 
