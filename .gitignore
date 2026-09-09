@@ -10,6 +10,9 @@
 
 # production
 /build
+dist/
+.expo/
+legacy_web/
 
 # misc
 .DS_Store
