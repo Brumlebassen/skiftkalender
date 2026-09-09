@@ -1,15 +1,18 @@
 {
   "expo": {
     "name": "Skiftkalender",
-    "slug": "skiftkalender",
+    "slug": "skiftkalender-mobile",
+    "owner": "brunlebassen",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.brunlebassen.skiftkalender"
     },
     "android": {
+      "package": "com.brunlebassen.skiftkalender",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -19,6 +22,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c7971539-8208-440b-bddd-da565f15c3e7"
+      }
     }
   }
 }
