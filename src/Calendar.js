@@ -23,10 +23,14 @@ import {
   isSameDay,
   differenceInCalendarDays,
   getISOWeek,
+  isWithinInterval,
+  parseISO,
 } from "date-fns";
 import { nb } from "date-fns/locale";
 import { getTheme, getShiftColor } from "./theme";
 import SettingsModal, { DEFAULT_SHIFT_TIMES } from "./SettingsModal";
+import FerieModal from "./FerieModal";
+import YearOverviewModal from "./YearOverviewModal";
 
 const baseRotasjon = [
   "Fm", "Fm", "Fm", "Fm", "Fri", "Fri", "Fri",
@@ -81,13 +85,24 @@ const Calendar = ({ isDark, toggleTheme }) => {
 
   // Modaler
   const [showSettings, setShowSettings] = useState(false);
+  const [showFerieModal, setShowFerieModal] = useState(false);
+  const [showYearOverview, setShowYearOverview] = useState(false);
   const [showDayModal, setShowDayModal] = useState(false);
+
+  const handleSelectDateFromOverview = (dateObj) => {
+    setCurrentMonth(dateObj);
+    const rawShift = getShiftForDate(dateObj, shiftGroup);
+    const dateStr = format(dateObj, "yyyy-MM-dd");
+    const dateKey = `${shiftGroup}-${dateStr}`;
+    handleDayPress(dateObj, rawShift, dateKey);
+  };
 
   // Dag-modal tilstand
   const [activeDate, setActiveDate] = useState(null);
   const [originalShift, setOriginalShift] = useState("");
-  const [chosenShiftOverride, setChosenShiftOverride] = useState(null);
-  const [isOvertid, setIsOvertid] = useState(false);
+  const [bytteShift, setBytteShift] = useState(null);
+  const [overtidShift, setOvertidShift] = useState(null);
+  const [isFerie, setIsFerie] = useState(false);
   const [commentText, setCommentText] = useState("");
 
   // Last lagrede data ved oppstart
@@ -124,7 +139,6 @@ const Calendar = ({ isDark, toggleTheme }) => {
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (evt, gestureState) => {
-        // Fang opp horisontal sveip som er tydelig større enn vertikal bevegelse
         return (
           Math.abs(gestureState.dx) > 35 &&
           Math.abs(gestureState.dy) < Math.abs(gestureState.dx) * 0.8
@@ -132,10 +146,8 @@ const Calendar = ({ isDark, toggleTheme }) => {
       },
       onPanResponderRelease: (evt, gestureState) => {
         if (gestureState.dx < -50) {
-          // Sveip venstre -> neste måned
           setCurrentMonth((prev) => addMonths(prev, 1));
         } else if (gestureState.dx > 50) {
-          // Sveip høyre -> førre måned
           setCurrentMonth((prev) => subMonths(prev, 1));
         }
       },
@@ -156,7 +168,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
   const handleToggleCompareGroup = async (num) => {
     let next;
     if (compareGroups.includes(num)) {
-      if (compareGroups.length === 1) return; // Må ha minst éin
+      if (compareGroups.length === 1) return;
       next = compareGroups.filter((g) => g !== num);
     } else {
       next = [...compareGroups, num].sort();
@@ -174,37 +186,39 @@ const Calendar = ({ isDark, toggleTheme }) => {
     setActiveDate(day);
     setOriginalShift(defShift);
 
-    const existingOverride = overrides[dateKey];
-    if (existingOverride) {
-      setChosenShiftOverride(existingOverride.shift || null);
-      setIsOvertid(Boolean(existingOverride.isOvertid));
+    const existing = overrides[dateKey];
+    if (existing) {
+      // Støtt både ny struktur og bakoverkompatibel struktur
+      setBytteShift(existing.bytteShift || (existing.shift && !existing.isOvertid ? existing.shift : null));
+      setOvertidShift(existing.overtidShift || (existing.isOvertid ? (existing.shift || defShift) : null));
+      setIsFerie(Boolean(existing.isFerie));
     } else {
-      setChosenShiftOverride(null);
-      setIsOvertid(false);
+      setBytteShift(null);
+      setOvertidShift(null);
+      setIsFerie(false);
     }
 
     setCommentText(comments[dateKey] || "");
     setShowDayModal(true);
   };
 
-  // Lagre dag (vaktbytte, overtid, kommentar)
+  // Lagre endringer for en dag
   const handleSaveDay = async () => {
     if (!activeDate) return;
     const dateKey = `${shiftGroup}-${format(activeDate, "yyyy-MM-dd")}`;
 
-    // 1. Håndter overstyring / overtid
     const updatedOverrides = { ...overrides };
-    if (chosenShiftOverride || isOvertid) {
+    if (bytteShift || overtidShift || isFerie) {
       updatedOverrides[dateKey] = {
-        shift: chosenShiftOverride || originalShift,
-        isOvertid: Boolean(isOvertid),
+        bytteShift: bytteShift || null,
+        overtidShift: overtidShift || null,
+        isFerie: Boolean(isFerie),
       };
     } else {
       delete updatedOverrides[dateKey];
     }
     setOverrides(updatedOverrides);
 
-    // 2. Håndter kommentar
     const trimmed = commentText.trim();
     const updatedComments = { ...comments };
     if (trimmed) {
@@ -226,7 +240,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
     }
   };
 
-  // Tilbakestill dag til standard
+  // Tilbakestill dag til ren turnus
   const handleResetDay = async () => {
     if (!activeDate) return;
     const dateKey = `${shiftGroup}-${format(activeDate, "yyyy-MM-dd")}`;
@@ -248,6 +262,59 @@ const Calendar = ({ isDark, toggleTheme }) => {
       ]);
     } catch (err) {
       console.warn("Feil ved sletting:", err);
+    }
+  };
+
+  // Lagre ferieperiode (fra dato til dato)
+  const handleSaveFeriePeriod = async (startDate, endDate) => {
+    const updated = { ...overrides };
+    let cur = new Date(startDate);
+    const end = new Date(endDate);
+
+    while (cur <= end) {
+      const dateKey = `${shiftGroup}-${format(cur, "yyyy-MM-dd")}`;
+      const existing = updated[dateKey] || {};
+      updated[dateKey] = {
+        ...existing,
+        isFerie: true,
+      };
+      cur = addDays(cur, 1);
+    }
+
+    setOverrides(updated);
+    try {
+      await AsyncStorage.setItem(SHIFT_OVERRIDES_KEY, JSON.stringify(updated));
+    } catch (err) {
+      console.warn("Feil ved lagring av ferieperiode:", err);
+    }
+  };
+
+  // Fjern ferie i periode
+  const handleRemoveFeriePeriod = async (startDate, endDate) => {
+    const updated = { ...overrides };
+    let cur = new Date(startDate);
+    const end = new Date(endDate);
+
+    while (cur <= end) {
+      const dateKey = `${shiftGroup}-${format(cur, "yyyy-MM-dd")}`;
+      if (updated[dateKey]) {
+        if (updated[dateKey].bytteShift || updated[dateKey].overtidShift) {
+          updated[dateKey] = {
+            ...updated[dateKey],
+            isFerie: false,
+          };
+        } else {
+          delete updated[dateKey];
+        }
+      }
+      cur = addDays(cur, 1);
+    }
+
+    setOverrides(updated);
+    try {
+      await AsyncStorage.setItem(SHIFT_OVERRIDES_KEY, JSON.stringify(updated));
+    } catch (err) {
+      console.warn("Feil ved fjerning av ferieperiode:", err);
     }
   };
 
@@ -280,18 +347,19 @@ const Calendar = ({ isDark, toggleTheme }) => {
   const weeks = [];
   for (let i = 0; i < 42; i += 7) {
     const weekDays = daysGrid.slice(i, i + 7);
-    // Bruker ISO-vekenummer fra første dag i uka (mandag)
     const weekNumber = getISOWeek(weekDays[0]);
     weeks.push({ weekNumber, days: weekDays });
   }
 
-  // Bestem aktiv vakt og tidsinfo i modal
-  const currentModalShift = chosenShiftOverride || originalShift;
-  const currentModalTime = shiftTimes[currentModalShift] || "";
+  // Tidsinfo i dag-modal
+  const activeEffectiveShift = isFerie
+    ? "Ferie"
+    : bytteShift || originalShift;
+  const currentModalTime = shiftTimes[activeEffectiveShift] || "";
 
   return (
     <View style={[styles.mainWrapper, { backgroundColor: theme.bg }]}>
-      {/* Topp-verktøylinje: Tema-knapp, Samanlikn-knapp, Innstillingar */}
+      {/* Topp-verktøylinje */}
       <View style={[styles.topBar, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}>
         <View style={styles.topBarLeft}>
           <TouchableOpacity
@@ -315,6 +383,22 @@ const Calendar = ({ isDark, toggleTheme }) => {
         </View>
 
         <View style={styles.topBarRight}>
+          <TouchableOpacity
+            style={[styles.overviewNavBtn, { backgroundColor: theme.inactiveButtonBg }]}
+            onPress={() => setShowYearOverview(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.overviewNavBtnText, { color: theme.textPrimary }]}>📋 Oversikt</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.ferieNavBtn, { backgroundColor: theme.ferieBadgeBg }]}
+            onPress={() => setShowFerieModal(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.ferieNavBtnText}>🏖️ Ferie</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={[styles.iconButton, { backgroundColor: theme.navButtonBg }]}
             onPress={() => setShowSettings(true)}
@@ -380,7 +464,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
           </View>
         </View>
 
-        {/* Måneds-navigator med sveipe-tips */}
+        {/* Måneds-navigator */}
         <View style={[styles.headerContainer, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}>
           <TouchableOpacity
             style={[styles.navButton, { backgroundColor: theme.navButtonBg }]}
@@ -463,7 +547,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
                   );
                 }
 
-                // Håndtering i samanlikningsmodus
+                // Samanlikningsmodus
                 if (isCompareMode) {
                   return (
                     <View
@@ -493,7 +577,6 @@ const Calendar = ({ isDark, toggleTheme }) => {
                         </View>
                       </View>
 
-                      {/* Vis skiftene for de valgte gruppene */}
                       <View style={styles.compareShiftsList}>
                         {compareGroups.map((grp) => {
                           const s = getShiftForDate(d, grp);
@@ -520,12 +603,28 @@ const Calendar = ({ isDark, toggleTheme }) => {
                   );
                 }
 
-                // Standard enkelt-skift visning
+                // Enkelt-skift visning
                 const rawShift = getShiftForDate(d, shiftGroup);
                 const override = overrides[dateKey];
-                const activeShift = override?.shift || rawShift;
-                const isOT = Boolean(override?.isOvertid);
-                const colorInfo = getShiftColor(activeShift, isDark);
+                const dayIsFerie = Boolean(override?.isFerie);
+                const dayByttet = override?.bytteShift || (override?.shift && !override?.isOvertid ? override.shift : null);
+                const dayOvertid = override?.overtidShift || (override?.isOvertid ? (override.shift || rawShift) : null);
+
+                // Bestem aktiv visningsvakt og farge
+                let displayShift = rawShift;
+                let displayColor = getShiftColor(rawShift, isDark);
+
+                if (dayIsFerie) {
+                  displayShift = "🏖️ Ferie";
+                  displayColor = getShiftColor("Ferie", isDark);
+                } else if (dayByttet) {
+                  displayShift = dayByttet;
+                  displayColor = getShiftColor(dayByttet, isDark);
+                } else if (dayOvertid && rawShift === "Fri") {
+                  // Tok overtid på ein fridag
+                  displayShift = dayOvertid;
+                  displayColor = getShiftColor(dayOvertid, isDark);
+                }
 
                 return (
                   <TouchableOpacity
@@ -533,8 +632,8 @@ const Calendar = ({ isDark, toggleTheme }) => {
                     style={[
                       styles.dayCell,
                       {
-                        backgroundColor: colorInfo.bg,
-                        borderColor: colorInfo.border,
+                        backgroundColor: displayColor.bg,
+                        borderColor: displayColor.border,
                       },
                       isCurrentDay && { borderColor: theme.todayBorder, borderWidth: 2 },
                     ]}
@@ -551,21 +650,33 @@ const Calendar = ({ isDark, toggleTheme }) => {
                         <Text
                           style={[
                             styles.dayNumberText,
-                            { color: isCurrentDay ? "#ffffff" : colorInfo.text },
+                            { color: isCurrentDay ? "#ffffff" : displayColor.text },
                           ]}
                         >
                           {format(d, "d")}
                         </Text>
                       </View>
+
+                      {/* Merke-rad: Vaktbytte (Lilla 🔄), Overtid (Oransje ⚡), Notat 📝 */}
                       <View style={styles.badgeRow}>
-                        {isOT && (
+                        {dayByttet && !dayIsFerie && (
                           <View
                             style={[
-                              styles.otBadge,
+                              styles.symbolBadge,
+                              { backgroundColor: theme.bytteBadgeBg },
+                            ]}
+                          >
+                            <Text style={styles.symbolBadgeText}>🔄</Text>
+                          </View>
+                        )}
+                        {dayOvertid && !dayIsFerie && (
+                          <View
+                            style={[
+                              styles.symbolBadge,
                               { backgroundColor: theme.overtidBadgeBg },
                             ]}
                           >
-                            <Text style={styles.otBadgeText}>OT</Text>
+                            <Text style={styles.symbolBadgeText}>⚡</Text>
                           </View>
                         )}
                         {hasComment && (
@@ -575,11 +686,11 @@ const Calendar = ({ isDark, toggleTheme }) => {
                     </View>
 
                     <Text
-                      style={[styles.shiftText, { color: colorInfo.text }]}
+                      style={[styles.shiftText, { color: displayColor.text }]}
                       numberOfLines={1}
                       adjustsFontSizeToFit
                     >
-                      {activeShift}
+                      {displayShift}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -588,10 +699,10 @@ const Calendar = ({ isDark, toggleTheme }) => {
           ))}
         </View>
 
-        {/* Fargeforklaring med skifttider */}
+        {/* Fargeforklaring med skifttider, ferie og merker */}
         <View style={[styles.legendContainer, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}>
           <Text style={[styles.legendTitle, { color: theme.textSecondary }]}>
-            Skift og arbeidstider
+            Skift, ferie og merker
           </Text>
           <View style={styles.legendGrid}>
             {[
@@ -601,6 +712,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
               { label: "12tFm (12t Formiddag)", shift: "12tFm" },
               { label: "12tN (12t Natt)", shift: "12tN" },
               { label: "Fri", shift: "Fri" },
+              { label: "🏖️ Ferie", shift: "Ferie" },
             ].map((item) => {
               const c = getShiftColor(item.shift, isDark);
               const time = shiftTimes[item.shift] || "";
@@ -626,6 +738,27 @@ const Calendar = ({ isDark, toggleTheme }) => {
               );
             })}
           </View>
+
+          {/* Forklaring for symboler: Vaktbytte og Overtid */}
+          <View style={styles.symbolLegendRow}>
+            <View style={styles.symbolLegendItem}>
+              <View style={[styles.symbolBadgeLarge, { backgroundColor: theme.bytteBadgeBg }]}>
+                <Text style={styles.symbolBadgeLargeText}>🔄</Text>
+              </View>
+              <Text style={[styles.symbolLegendLabel, { color: theme.textPrimary }]}>
+                Vaktbytte (Lilla)
+              </Text>
+            </View>
+
+            <View style={styles.symbolLegendItem}>
+              <View style={[styles.symbolBadgeLarge, { backgroundColor: theme.overtidBadgeBg }]}>
+                <Text style={styles.symbolBadgeLargeText}>⚡</Text>
+              </View>
+              <Text style={[styles.symbolLegendLabel, { color: theme.textPrimary }]}>
+                Overtid (Oransje)
+              </Text>
+            </View>
+          </View>
         </View>
       </ScrollView>
 
@@ -638,7 +771,29 @@ const Calendar = ({ isDark, toggleTheme }) => {
         theme={theme}
       />
 
-      {/* Dag-modal for vaktbytte, overtid og notater */}
+      {/* Ferie-modal for heile periodar */}
+      <FerieModal
+        visible={showFerieModal}
+        onClose={() => setShowFerieModal(false)}
+        onSaveFeriePeriod={handleSaveFeriePeriod}
+        onRemoveFeriePeriod={handleRemoveFeriePeriod}
+        theme={theme}
+      />
+
+      {/* Årsoversikt-modal for overtid og ferie */}
+      <YearOverviewModal
+        visible={showYearOverview}
+        onClose={() => setShowYearOverview(false)}
+        overrides={overrides}
+        comments={comments}
+        shiftGroup={shiftGroup}
+        shiftTimes={shiftTimes}
+        theme={theme}
+        isDark={isDark}
+        onSelectDate={handleSelectDateFromOverview}
+      />
+
+      {/* Dag-modal for vaktbytte, overtid, ferie og notater */}
       <Modal
         visible={showDayModal}
         transparent
@@ -650,137 +805,190 @@ const Calendar = ({ isDark, toggleTheme }) => {
           style={[styles.modalOverlay, { backgroundColor: theme.modalOverlay }]}
         >
           <View style={[styles.modalCard, { backgroundColor: theme.cardBg }]}>
-            <Text style={[styles.modalDate, { color: theme.textPrimary }]}>
-              {activeDate
-                ? format(activeDate, "EEEE d. MMMM yyyy", { locale: nb })
-                : ""}
-            </Text>
-
-            {/* Skift-info og arbeidstid */}
-            <View style={styles.modalInfoBox}>
-              <Text style={[styles.modalOriginalShiftText, { color: theme.textSecondary }]}>
-                Opphavleg vakt:{" "}
-                <Text style={{ fontWeight: "bold", color: theme.textPrimary }}>
-                  {originalShift}
-                </Text>{" "}
-                (Gruppe {shiftGroup})
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={[styles.modalDate, { color: theme.textPrimary }]}>
+                {activeDate
+                  ? format(activeDate, "EEEE d. MMMM yyyy", { locale: nb })
+                  : ""}
               </Text>
-              {currentModalTime ? (
-                <Text style={[styles.modalTimeText, { color: theme.textMuted }]}>
-                  ⏰ Arbeidstid: {currentModalTime}
+
+              {/* Turnusinfo */}
+              <View style={[styles.modalInfoBox, { backgroundColor: theme.inactiveButtonBg }]}>
+                <Text style={[styles.modalOriginalShiftText, { color: theme.textSecondary }]}>
+                  Turnusvakt:{" "}
+                  <Text style={{ fontWeight: "bold", color: theme.textPrimary }}>
+                    {originalShift}
+                  </Text>{" "}
+                  (Gruppe {shiftGroup})
                 </Text>
-              ) : null}
-            </View>
+                {currentModalTime ? (
+                  <Text style={[styles.modalTimeText, { color: theme.textMuted }]}>
+                    ⏰ Arbeidstid: {currentModalTime}
+                  </Text>
+                ) : null}
+              </View>
 
-            {/* Vaktbytte seksjon */}
-            <Text style={[styles.modalSectionTitle, { color: theme.textSecondary }]}>
-              Vaktbytte (velg vakt om du har bytta):
-            </Text>
-            <View style={styles.shiftOverrideRow}>
-              {ALL_SHIFTS.map((s) => {
-                const isSelected = chosenShiftOverride === s;
-                const sc = getShiftColor(s, isDark);
-                return (
-                  <TouchableOpacity
-                    key={s}
-                    style={[
-                      styles.shiftOverrideChip,
-                      { backgroundColor: sc.bg, borderColor: sc.border },
-                      isSelected && styles.shiftOverrideChipSelected,
-                    ]}
-                    onPress={() =>
-                      setChosenShiftOverride(isSelected ? null : s)
-                    }
-                    activeOpacity={0.7}
-                  >
-                    <Text
-                      style={[
-                        styles.shiftOverrideChipText,
-                        { color: sc.text },
-                        isSelected && { fontWeight: "900" },
-                      ]}
-                    >
-                      {s}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {/* Overtid / ekstravakt avkryssing */}
-            <TouchableOpacity
-              style={[
-                styles.overtidToggleRow,
-                { backgroundColor: theme.inactiveButtonBg },
-                isOvertid && { backgroundColor: theme.overtidBadgeBg },
-              ]}
-              onPress={() => setIsOvertid(!isOvertid)}
-              activeOpacity={0.7}
-            >
-              <Text
-                style={[
-                  styles.overtidToggleText,
-                  { color: isOvertid ? "#ffffff" : theme.textPrimary },
-                ]}
-              >
-                {isOvertid ? "✓ Merka som overtid / ekstravakt" : "+ Merk som overtid / ekstravakt"}
-              </Text>
-            </TouchableOpacity>
-
-            {/* Notat input */}
-            <Text style={[styles.modalSectionTitle, { color: theme.textSecondary }]}>
-              Notat for denne dagen:
-            </Text>
-            <TextInput
-              style={[
-                styles.modalInput,
-                {
-                  backgroundColor: theme.inputBg,
-                  borderColor: theme.inputBorder,
-                  color: theme.inputText,
-                },
-              ]}
-              value={commentText}
-              onChangeText={setCommentText}
-              placeholder="F.eks. bytta med Arne, 2t overtid etter vakt..."
-              placeholderTextColor={theme.textMuted}
-              multiline
-              numberOfLines={3}
-              textAlignVertical="top"
-            />
-
-            {/* Handlingsknappar */}
-            <View style={styles.modalActions}>
+              {/* 1. FERIE-VELGER */}
               <TouchableOpacity
-                style={[styles.deleteButton, { borderColor: theme.cardBorder }]}
-                onPress={handleResetDay}
+                style={[
+                  styles.ferieToggleBtn,
+                  { backgroundColor: theme.inactiveButtonBg, borderColor: theme.cardBorder },
+                  isFerie && { backgroundColor: theme.ferieBadgeBg },
+                ]}
+                onPress={() => setIsFerie(!isFerie)}
                 activeOpacity={0.7}
               >
-                <Text style={styles.deleteButtonText}>Tilbakestill</Text>
+                <Text
+                  style={[
+                    styles.ferieToggleBtnText,
+                    { color: isFerie ? "#ffffff" : theme.textPrimary },
+                  ]}
+                >
+                  {isFerie ? "✓ Merka som Ferie (🏖️)" : "🏖️ Merk denne dagen som Ferie"}
+                </Text>
               </TouchableOpacity>
 
-              <View style={styles.modalRightActions}>
+              {!isFerie && (
+                <>
+                  {/* 2. VAKTBYTTE (LILLA 🔄) */}
+                  <View style={styles.sectionHeader}>
+                    <View style={[styles.symbolBadgeSmall, { backgroundColor: theme.bytteBadgeBg }]}>
+                      <Text style={styles.symbolBadgeSmallText}>🔄</Text>
+                    </View>
+                    <Text style={[styles.modalSectionTitle, { color: theme.textSecondary }]}>
+                      Vaktbytte (velg vakt du bytte til):
+                    </Text>
+                  </View>
+                  <View style={styles.chipsRow}>
+                    {ALL_SHIFTS.map((s) => {
+                      const isSelected = bytteShift === s;
+                      const sc = getShiftColor(s, isDark);
+                      return (
+                        <TouchableOpacity
+                          key={s}
+                          style={[
+                            styles.overrideChip,
+                            { backgroundColor: sc.bg, borderColor: sc.border },
+                            isSelected && {
+                              backgroundColor: theme.bytteBadgeBg,
+                              borderColor: theme.bytteBadgeBg,
+                              borderWidth: 2,
+                            },
+                          ]}
+                          onPress={() => setBytteShift(isSelected ? null : s)}
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[
+                              styles.overrideChipText,
+                              { color: isSelected ? "#ffffff" : sc.text },
+                            ]}
+                          >
+                            {s}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  {/* 3. OVERTID (ORANSJE ⚡) */}
+                  <View style={styles.sectionHeader}>
+                    <View style={[styles.symbolBadgeSmall, { backgroundColor: theme.overtidBadgeBg }]}>
+                      <Text style={styles.symbolBadgeSmallText}>⚡</Text>
+                    </View>
+                    <Text style={[styles.modalSectionTitle, { color: theme.textSecondary }]}>
+                      Overtid / Ekstravakt (velg vakt du tok):
+                    </Text>
+                  </View>
+                  <View style={styles.chipsRow}>
+                    {ALL_SHIFTS.filter((s) => s !== "Fri").map((s) => {
+                      const isSelected = overtidShift === s;
+                      const sc = getShiftColor(s, isDark);
+                      return (
+                        <TouchableOpacity
+                          key={s}
+                          style={[
+                            styles.overrideChip,
+                            { backgroundColor: sc.bg, borderColor: sc.border },
+                            isSelected && {
+                              backgroundColor: theme.overtidBadgeBg,
+                              borderColor: theme.overtidBadgeBg,
+                              borderWidth: 2,
+                            },
+                          ]}
+                          onPress={() => setOvertidShift(isSelected ? null : s)}
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[
+                              styles.overrideChipText,
+                              { color: isSelected ? "#ffffff" : sc.text },
+                            ]}
+                          >
+                            {s}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
+
+              {/* 4. NOTAT */}
+              <Text style={[styles.modalSectionTitle, { color: theme.textSecondary, marginTop: 10 }]}>
+                📝 Notat for denne dagen:
+              </Text>
+              <TextInput
+                style={[
+                  styles.modalInput,
+                  {
+                    backgroundColor: theme.inputBg,
+                    borderColor: theme.inputBorder,
+                    color: theme.inputText,
+                  },
+                ]}
+                value={commentText}
+                onChangeText={setCommentText}
+                placeholder="F.eks. bytta med Arne, tok 12t overtid..."
+                placeholderTextColor={theme.textMuted}
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
+              />
+
+              {/* Handlingsknappar */}
+              <View style={styles.modalActions}>
                 <TouchableOpacity
-                  style={[styles.cancelButton, { backgroundColor: theme.inactiveButtonBg }]}
-                  onPress={() => setShowDayModal(false)}
+                  style={[styles.deleteButton, { borderColor: theme.cardBorder }]}
+                  onPress={handleResetDay}
                   activeOpacity={0.7}
                 >
-                  <Text style={[styles.cancelButtonText, { color: theme.inactiveButtonText }]}>
-                    Avbryt
-                  </Text>
+                  <Text style={styles.deleteButtonText}>Tilbakestill</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[styles.saveButton, { backgroundColor: theme.activeButtonBg }]}
-                  onPress={handleSaveDay}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.saveButtonText, { color: theme.activeButtonText }]}>
-                    Lagre
-                  </Text>
-                </TouchableOpacity>
+                <View style={styles.modalRightActions}>
+                  <TouchableOpacity
+                    style={[styles.cancelButton, { backgroundColor: theme.inactiveButtonBg }]}
+                    onPress={() => setShowDayModal(false)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.cancelButtonText, { color: theme.inactiveButtonText }]}>
+                      Avbryt
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.saveButton, { backgroundColor: theme.activeButtonBg }]}
+                    onPress={handleSaveDay}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.saveButtonText, { color: theme.activeButtonText }]}>
+                      Lagre
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
+            </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -803,7 +1011,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
@@ -813,10 +1021,11 @@ const styles = StyleSheet.create({
   },
   topBarRight: {
     flexDirection: "row",
-    gap: 8,
+    alignItems: "center",
+    gap: 6,
   },
   modeButton: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 20,
   },
@@ -824,15 +1033,34 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
-  iconButton: {
-    width: 36,
-    height: 36,
+  overviewNavBtn: {
+    paddingHorizontal: 9,
+    paddingVertical: 6,
     borderRadius: 18,
+  },
+  overviewNavBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  ferieNavBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 18,
+  },
+  ferieNavBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#ffffff",
+  },
+  iconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     justifyContent: "center",
     alignItems: "center",
   },
   iconButtonText: {
-    fontSize: 16,
+    fontSize: 15,
   },
   selectorCard: {
     borderRadius: 14,
@@ -960,7 +1188,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     marginHorizontal: 1.5,
-    padding: 2.5,
+    padding: 2,
     justifyContent: "space-between",
   },
   compareDayCell: {
@@ -989,14 +1217,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   dayNumberContainer: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    width: 17,
+    height: 17,
+    borderRadius: 8.5,
     justifyContent: "center",
     alignItems: "center",
   },
   dayNumberText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: "700",
   },
   dayNumberOutside: {
@@ -1006,23 +1234,23 @@ const styles = StyleSheet.create({
   badgeRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 2,
+    gap: 1.5,
   },
-  otBadge: {
-    paddingHorizontal: 3,
-    paddingVertical: 1,
-    borderRadius: 3,
+  symbolBadge: {
+    width: 14,
+    height: 14,
+    borderRadius: 4,
+    justifyContent: "center",
+    alignItems: "center",
   },
-  otBadgeText: {
+  symbolBadgeText: {
     fontSize: 8,
-    fontWeight: "900",
-    color: "#ffffff",
   },
   commentIndicator: {
-    fontSize: 9,
+    fontSize: 8,
   },
   shiftText: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: "800",
     textAlign: "center",
     marginBottom: 1,
@@ -1074,6 +1302,33 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 1,
   },
+  symbolLegendRow: {
+    flexDirection: "row",
+    gap: 14,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#cbd5e1",
+  },
+  symbolLegendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  symbolBadgeLarge: {
+    width: 18,
+    height: 18,
+    borderRadius: 5,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  symbolBadgeLargeText: {
+    fontSize: 10,
+  },
+  symbolLegendLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+  },
   modalOverlay: {
     flex: 1,
     justifyContent: "center",
@@ -1083,8 +1338,9 @@ const styles = StyleSheet.create({
   modalCard: {
     width: "100%",
     maxWidth: 400,
+    maxHeight: "90%",
     borderRadius: 20,
-    padding: 20,
+    padding: 18,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.2,
@@ -1098,7 +1354,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   modalInfoBox: {
-    marginBottom: 12,
+    padding: 8,
+    borderRadius: 8,
+    marginBottom: 10,
   },
   modalOriginalShiftText: {
     fontSize: 13,
@@ -1107,41 +1365,52 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  ferieToggleBtn: {
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: "center",
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  ferieToggleBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  symbolBadgeSmall: {
+    width: 16,
+    height: 16,
+    borderRadius: 4,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  symbolBadgeSmallText: {
+    fontSize: 9,
+  },
   modalSectionTitle: {
     fontSize: 12,
     fontWeight: "700",
-    marginBottom: 6,
   },
-  shiftOverrideRow: {
+  chipsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 6,
-    marginBottom: 12,
+    marginBottom: 6,
   },
-  shiftOverrideChip: {
+  overrideChip: {
     paddingVertical: 5,
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     borderRadius: 8,
     borderWidth: 1,
   },
-  shiftOverrideChipSelected: {
-    borderWidth: 2,
-    borderColor: "#0284c7",
-    transform: [{ scale: 1.05 }],
-  },
-  shiftOverrideChipText: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  overtidToggleRow: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    alignItems: "center",
-    marginBottom: 14,
-  },
-  overtidToggleText: {
-    fontSize: 13,
+  overrideChipText: {
+    fontSize: 11,
     fontWeight: "700",
   },
   modalInput: {
@@ -1149,8 +1418,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 10,
     fontSize: 13,
-    height: 75,
-    marginBottom: 16,
+    height: 65,
+    marginBottom: 14,
+    marginTop: 4,
   },
   modalActions: {
     flexDirection: "row",

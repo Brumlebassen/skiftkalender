@@ -29,6 +29,10 @@ export const getTheme = (isDark) => {
       modalOverlay: "rgba(0, 0, 0, 0.7)",
       overtidBadgeBg: "#ea580c",
       overtidBadgeText: "#ffffff",
+      bytteBadgeBg: "#7c3aed",
+      bytteBadgeText: "#ffffff",
+      ferieBadgeBg: "#06b6d4",
+      ferieBadgeText: "#ffffff",
     };
   }
 
@@ -61,10 +65,21 @@ export const getTheme = (isDark) => {
     modalOverlay: "rgba(15, 23, 42, 0.5)",
     overtidBadgeBg: "#ea580c",
     overtidBadgeText: "#ffffff",
+    bytteBadgeBg: "#7c3aed",
+    bytteBadgeText: "#ffffff",
+    ferieBadgeBg: "#0891b2",
+    ferieBadgeText: "#ffffff",
   };
 };
 
 export const getShiftColor = (shift, isDark = false) => {
+  if (shift === "Ferie") {
+    if (isDark) {
+      return { bg: "#155e75", text: "#a5f3fc", border: "#0891b2" };
+    }
+    return { bg: "#cffafe", text: "#0e7490", border: "#67e8f9" };
+  }
+
   if (isDark) {
     switch (shift) {
       case "Fm":
