@@ -48,16 +48,49 @@ const getDefaultCalendarSource = async () => {
 };
 
 /**
- * Henter eller oppretter en egen dedikert kalender på telefonen
+ * Henter liste over alle skrivbare kalendere på telefonen
  */
-export const getOrCreateShiftCalendar = async () => {
+export const getAvailableCalendars = async () => {
+  try {
+    const hasPermission = await requestCalendarPermissions();
+    if (!hasPermission) return [];
+    const calendars = (await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT)) || [];
+    return calendars.filter((c) => c.allowsModifications);
+  } catch (err) {
+    console.warn("Kunne ikkje hente kalendrar:", err);
+    return [];
+  }
+};
+
+/**
+ * Henter eller oppretter en egen dedikert kalender på telefonen,
+ * eller bruker en spesifisert kalender-ID
+ */
+export const getOrCreateShiftCalendar = async (selectedCalendarId = null) => {
   const calendars = (await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT)) || [];
+
+  // Hvis brukeren har valgt en spesifikk eksisterende kalender
+  if (selectedCalendarId) {
+    const chosen = calendars.find((c) => c.id === selectedCalendarId);
+    if (chosen) {
+      return {
+        id: chosen.id,
+        title: chosen.title || chosen.name || "Valgt kalender",
+        isDedicated: chosen.title === CALENDAR_NAME || chosen.name === CALENDAR_NAME,
+      };
+    }
+  }
+
   const existing = calendars.find(
     (c) => c.title === CALENDAR_NAME || c.name === CALENDAR_NAME
   );
 
   if (existing) {
-    return existing.id;
+    return {
+      id: existing.id,
+      title: existing.title || CALENDAR_NAME,
+      isDedicated: true,
+    };
   }
 
   // Prøv å opprette «Skiftkalender»
@@ -69,6 +102,9 @@ export const getOrCreateShiftCalendar = async () => {
       name: CALENDAR_NAME,
       accessLevel: Calendar.CalendarAccessLevel.OWNER,
       ownerAccount: "personal",
+      isVisible: true,
+      isSynced: true,
+      allowsModifications: true,
     };
 
     if (Platform.OS === "ios") {
@@ -83,8 +119,12 @@ export const getOrCreateShiftCalendar = async () => {
       newCalendarDetails.sourceId = source.id;
       newCalendarDetails.source = source;
     } else {
-      // Android
+      // Android: Sørg for at isVisible og isSynced er påslått
       newCalendarDetails.timeZone = "Europe/Oslo";
+      newCalendarDetails.isVisible = true;
+      newCalendarDetails.isSynced = true;
+      newCalendarDetails.allowsModifications = true;
+
       const existingCalWithSource = calendars.find((c) => c.source && c.source.name);
       if (existingCalWithSource && existingCalWithSource.source) {
         newCalendarDetails.source = {
@@ -105,7 +145,11 @@ export const getOrCreateShiftCalendar = async () => {
     }
 
     const newId = await Calendar.createCalendarAsync(newCalendarDetails);
-    return newId;
+    return {
+      id: newId,
+      title: CALENDAR_NAME,
+      isDedicated: true,
+    };
   } catch (err) {
     console.warn(
       "Kunne ikkje opprette dedikert kalender, brukar eksisterande skrivbar kalender:",
@@ -119,7 +163,11 @@ export const getOrCreateShiftCalendar = async () => {
       freshCalendars[0];
 
     if (writableCal) {
-      return writableCal.id;
+      return {
+        id: writableCal.id,
+        title: writableCal.title || writableCal.name || "Hovudkalender",
+        isDedicated: false,
+      };
     }
     throw new Error(
       "Fann ingen skrivbar kalender på telefonen. Sjekk at Google Kalender eller Kalender-appen er installert og aktiv."
@@ -186,13 +234,15 @@ export const syncShiftsToDevice = async ({
   comments,
   shiftTimes,
   includeFridager = false,
+  targetCalendarId = null,
 }) => {
   const hasPermission = await requestCalendarPermissions();
   if (!hasPermission) {
     throw new Error("Manglar kalendertilgang. Gje tilgang i innstillingar.");
   }
 
-  const calendarId = await getOrCreateShiftCalendar();
+  const targetCal = await getOrCreateShiftCalendar(targetCalendarId);
+  const calendarId = targetCal.id;
 
   // 1. Slett eksisterende hendelser i tidsrommet for å unngå duplikater
   try {
@@ -307,7 +357,11 @@ export const syncShiftsToDevice = async ({
     cur = addDays(cur, 1);
   }
 
-  return count;
+  return {
+    count,
+    calendarTitle: targetCal.title,
+    isDedicated: targetCal.isDedicated,
+  };
 };
 
 /**
