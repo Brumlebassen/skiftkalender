@@ -31,6 +31,7 @@ import { getTheme, getShiftColor } from "./theme";
 import SettingsModal, { DEFAULT_SHIFT_TIMES } from "./SettingsModal";
 import FerieModal from "./FerieModal";
 import YearOverviewModal from "./YearOverviewModal";
+import SyncShareModal from "./SyncShareModal";
 
 const baseRotasjon = [
   "Fm", "Fm", "Fm", "Fm", "Fri", "Fri", "Fri",
@@ -87,6 +88,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [showFerieModal, setShowFerieModal] = useState(false);
   const [showYearOverview, setShowYearOverview] = useState(false);
+  const [showSyncModal, setShowSyncModal] = useState(false);
   const [showDayModal, setShowDayModal] = useState(false);
 
   const handleSelectDateFromOverview = (dateObj) => {
@@ -359,62 +361,74 @@ const Calendar = ({ isDark, toggleTheme }) => {
 
   return (
     <View style={[styles.mainWrapper, { backgroundColor: theme.bg }]}>
-      {/* Topp-verktøylinje */}
-      <View style={[styles.topBar, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}>
-        <View style={styles.topBarLeft}>
+      {/* Topp-verktøylinje som aldri vert kutta av på små skjermar */}
+      <View style={[styles.topToolbar, { backgroundColor: theme.cardBg, borderBottomColor: theme.cardBorder }]}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.topToolbarContent}
+        >
+          {/* Samanlikn */}
           <TouchableOpacity
             style={[
-              styles.modeButton,
-              isCompareMode && { backgroundColor: theme.activeButtonBg },
-              !isCompareMode && { backgroundColor: theme.inactiveButtonBg },
+              styles.toolbarPill,
+              { backgroundColor: isCompareMode ? theme.activeButtonBg : theme.inactiveButtonBg },
             ]}
             onPress={() => setIsCompareMode(!isCompareMode)}
             activeOpacity={0.7}
           >
             <Text
               style={[
-                styles.modeButtonText,
+                styles.toolbarPillText,
                 { color: isCompareMode ? theme.activeButtonText : theme.inactiveButtonText },
               ]}
             >
-              👥 {isCompareMode ? "Samanliknar" : "Samanlikn skift"}
+              👥 {isCompareMode ? "Samanliknar" : "Samanlikn"}
             </Text>
           </TouchableOpacity>
-        </View>
 
-        <View style={styles.topBarRight}>
+          {/* Synk & del */}
           <TouchableOpacity
-            style={[styles.overviewNavBtn, { backgroundColor: theme.inactiveButtonBg }]}
+            style={[styles.toolbarPill, { backgroundColor: theme.inactiveButtonBg }]}
+            onPress={() => setShowSyncModal(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.toolbarPillText, { color: theme.textPrimary }]}>
+              📲 Synk & del
+            </Text>
+          </TouchableOpacity>
+
+          {/* Årsoversikt */}
+          <TouchableOpacity
+            style={[styles.toolbarPill, { backgroundColor: theme.inactiveButtonBg }]}
             onPress={() => setShowYearOverview(true)}
             activeOpacity={0.7}
           >
-            <Text style={[styles.overviewNavBtnText, { color: theme.textPrimary }]}>📋 Oversikt</Text>
+            <Text style={[styles.toolbarPillText, { color: theme.textPrimary }]}>
+              📋 Oversikt
+            </Text>
           </TouchableOpacity>
 
+          {/* Ferie */}
           <TouchableOpacity
-            style={[styles.ferieNavBtn, { backgroundColor: theme.ferieBadgeBg }]}
+            style={[styles.toolbarPill, { backgroundColor: theme.ferieBadgeBg }]}
             onPress={() => setShowFerieModal(true)}
             activeOpacity={0.7}
           >
-            <Text style={styles.ferieNavBtnText}>🏖️ Ferie</Text>
+            <Text style={[styles.toolbarPillText, { color: "#ffffff" }]}>
+              🏖️ Ferie
+            </Text>
           </TouchableOpacity>
 
+          {/* Innstillingar */}
           <TouchableOpacity
-            style={[styles.iconButton, { backgroundColor: theme.navButtonBg }]}
+            style={[styles.toolbarIconBtn, { backgroundColor: theme.navButtonBg }]}
             onPress={() => setShowSettings(true)}
             activeOpacity={0.7}
           >
-            <Text style={styles.iconButtonText}>⚙️</Text>
+            <Text style={styles.toolbarIconText}>⚙️</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.iconButton, { backgroundColor: theme.navButtonBg }]}
-            onPress={toggleTheme}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.iconButtonText}>{isDark ? "☀️" : "🌙"}</Text>
-          </TouchableOpacity>
-        </View>
+        </ScrollView>
       </View>
 
       <ScrollView
@@ -793,6 +807,20 @@ const Calendar = ({ isDark, toggleTheme }) => {
         onSelectDate={handleSelectDateFromOverview}
       />
 
+      {/* Synkronisering og deling-modal */}
+      <SyncShareModal
+        visible={showSyncModal}
+        onClose={() => setShowSyncModal(false)}
+        currentMonth={currentMonth}
+        shiftGroup={shiftGroup}
+        getShiftForDate={getShiftForDate}
+        overrides={overrides}
+        comments={comments}
+        shiftTimes={shiftTimes}
+        theme={theme}
+        isDark={isDark}
+      />
+
       {/* Dag-modal for vaktbytte, overtid, ferie og notater */}
       <Modal
         visible={showDayModal}
@@ -963,7 +991,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
                   onPress={handleResetDay}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.deleteButtonText}>Tilbakestill</Text>
+                  <Text style={styles.deleteButtonText}>Nullstill dato</Text>
                 </TouchableOpacity>
 
                 <View style={styles.modalRightActions}>
@@ -1007,60 +1035,36 @@ const styles = StyleSheet.create({
     padding: 12,
     paddingBottom: 40,
   },
-  topBar: {
+  topToolbar: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 7,
+  },
+  topToolbarContent: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: 8,
   },
-  topBarLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  topBarRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  modeButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+  toolbarPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 20,
-  },
-  modeButtonText: {
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  overviewNavBtn: {
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    borderRadius: 18,
-  },
-  overviewNavBtnText: {
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  ferieNavBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 18,
-  },
-  ferieNavBtnText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#ffffff",
-  },
-  iconButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    justifyContent: "center",
     alignItems: "center",
+    justifyContent: "center",
   },
-  iconButtonText: {
-    fontSize: 15,
+  toolbarPillText: {
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  toolbarIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  toolbarIconText: {
+    fontSize: 16,
   },
   selectorCard: {
     borderRadius: 14,

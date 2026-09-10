@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { StyleSheet, View, Text, useColorScheme } from "react-native";
+import { StyleSheet, View, Text, TouchableOpacity, useColorScheme } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -56,6 +56,14 @@ export default function App() {
           <Text style={[styles.title, { color: theme.textPrimary }]}>
             Skiftkalender
           </Text>
+          <TouchableOpacity
+            onPress={toggleTheme}
+            style={[styles.themeBtn, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder }]}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={styles.themeBtnText}>{isDark ? "☀️" : "🌙"}</Text>
+          </TouchableOpacity>
         </View>
         <Calendar isDark={isDark} toggleTheme={toggleTheme} />
       </SafeAreaView>
@@ -68,14 +76,27 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    alignItems: "center",
   },
   title: {
-    fontSize: 19,
+    fontSize: 20,
     fontWeight: "800",
     letterSpacing: 0.3,
+  },
+  themeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  themeBtnText: {
+    fontSize: 18,
   },
 });

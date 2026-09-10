@@ -9,10 +9,18 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.brunlebassen.skiftkalender"
+      "bundleIdentifier": "com.brunlebassen.skiftkalender",
+      "infoPlist": {
+        "NSCalendarsUsageDescription": "Skiftkalender bruker kalenderen for å synkronisere skiftene dine.",
+        "NSCalendarsFullAccessUsageDescription": "Skiftkalender bruker kalenderen for å synkronisere skiftene dine."
+      }
     },
     "android": {
       "package": "com.brunlebassen.skiftkalender",
+      "permissions": [
+        "READ_CALENDAR",
+        "WRITE_CALENDAR"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -27,6 +35,10 @@
       "eas": {
         "projectId": "c7971539-8208-440b-bddd-da565f15c3e7"
       }
-    }
+    },
+    "plugins": [
+      "expo-calendar",
+      "expo-sharing"
+    ]
   }
 }
