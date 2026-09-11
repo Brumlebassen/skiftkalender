@@ -32,44 +32,16 @@ import SettingsModal, { DEFAULT_SHIFT_TIMES } from "./SettingsModal";
 import FerieModal from "./FerieModal";
 import YearOverviewModal from "./YearOverviewModal";
 import SyncShareModal from "./SyncShareModal";
-
-const baseRotasjon = [
-  "Fm", "Fm", "Fm", "Fm", "Fri", "Fri", "Fri",
-  "N", "N", "N", "N", "Fri", "Fri", "Fri",
-  "Fri", "Fri", "Em", "Em", "12tN", "12tN", "12tN",
-  "Fri", "Fri", "Fri", "Fri", "12tFm", "12tFm", "12tFm",
-  "Em", "Em", "Fri", "Fri", "Fri", "Fri", "Fri"
-];
-
-const skiftStartInfo = {
-  1: { date: new Date(2025, 5, 6), startCode: "12tFm" },
-  2: { date: new Date(2025, 5, 2), startCode: "Fm" },
-  3: { date: new Date(2025, 5, 4), startCode: "Em" },
-  4: { date: new Date(2025, 5, 9), startCode: "Fm" },
-  5: { date: new Date(2025, 5, 2), startCode: "N" }
-};
-
-const generateSkiftRotasjon = (startCode) => {
-  const idx = baseRotasjon.indexOf(startCode);
-  if (idx === -1) return baseRotasjon;
-  return [...baseRotasjon.slice(idx), ...baseRotasjon.slice(0, idx)];
-};
-
-const getShiftForDate = (date, shiftGroup) => {
-  const { date: startDate, startCode } = skiftStartInfo[shiftGroup];
-  const rotasjon = generateSkiftRotasjon(startCode);
-  const daysDiff = differenceInCalendarDays(date, startDate);
-  const index = ((daysDiff % 35) + 35) % 35;
-  return rotasjon[index];
-};
-
-const SHIFT_COMMENTS_KEY = "@shiftComments";
-const SELECTED_SHIFT_KEY = "@selectedShiftGroup";
-const SHIFT_OVERRIDES_KEY = "@shiftOverrides";
-const SHIFT_TIMES_KEY = "@shiftTimes";
-const COMPARE_SHIFTS_KEY = "@compareShifts";
-
-const ALL_SHIFTS = ["Fm", "Em", "N", "12tFm", "12tN", "Fri"];
+import {
+  getShiftForDate,
+  ALL_SHIFTS,
+  SHIFT_COMMENTS_KEY,
+  SELECTED_SHIFT_KEY,
+  SHIFT_OVERRIDES_KEY,
+  SHIFT_TIMES_KEY,
+  COMPARE_SHIFTS_KEY,
+} from "./shiftCalculator";
+import { updateHomeScreenWidget } from "./widgets/widgetSyncService";
 
 const Calendar = ({ isDark, toggleTheme }) => {
   const theme = getTheme(isDark);
@@ -136,6 +108,11 @@ const Calendar = ({ isDark, toggleTheme }) => {
     };
     loadSavedData();
   }, []);
+
+  // Oppdater heimeskjerm-widget når skiftgruppe, overstyringar eller tider endrast
+  useEffect(() => {
+    updateHomeScreenWidget();
+  }, [shiftGroup, overrides, shiftTimes, isDark]);
 
   // PanResponder for sveiping mellom måneder (swipe gestures)
   const panResponder = useRef(

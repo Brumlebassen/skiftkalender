@@ -38,7 +38,24 @@
     },
     "plugins": [
       "expo-calendar",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "react-native-android-widget",
+        {
+          "widgets": [
+            {
+              "name": "ShiftGlanceWidget",
+              "label": "Skiftkalender Hurtigblikk",
+              "minWidth": "160dp",
+              "minHeight": "100dp",
+              "targetCellWidth": 3,
+              "targetCellHeight": 2,
+              "description": "Viser dagens og neste vakter frå Skiftkalender",
+              "updatePeriodMillis": 1800000
+            }
+          ]
+        }
+      ]
     ]
   }
 }
