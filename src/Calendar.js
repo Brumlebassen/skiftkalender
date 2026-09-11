@@ -47,6 +47,7 @@ import {
   DEFAULT_ALARM_CONFIG,
   SHIFT_ALARM_CONFIG_KEY,
   rescheduleAllShiftAlarms,
+  setNativeClockAlarm,
 } from "./alarmService";
 
 const Calendar = ({ isDark, toggleTheme }) => {
@@ -916,9 +917,36 @@ const Calendar = ({ isDark, toggleTheme }) => {
                   const sc = alarmConfig.times?.[effective];
                   if (sc?.enabled && sc?.time) {
                     return (
-                      <Text style={[styles.modalTimeText, { color: isDark ? "#93c5fd" : "#2563eb", fontWeight: "600", marginTop: 4 }]}>
-                        ⏰ Skiftalarm: kl. {sc.time} ({effective})
-                      </Text>
+                      <View style={{ marginTop: 4 }}>
+                        <Text style={[styles.modalTimeText, { color: isDark ? "#93c5fd" : "#2563eb", fontWeight: "600" }]}>
+                          ⏰ Skiftalarm: kl. {sc.time} ({effective})
+                        </Text>
+                        <TouchableOpacity
+                          style={{
+                            marginTop: 6,
+                            backgroundColor: isDark ? "#1e3a8a" : "#dbeafe",
+                            paddingVertical: 6,
+                            paddingHorizontal: 10,
+                            borderRadius: 6,
+                            alignSelf: "flex-start",
+                          }}
+                          onPress={() => {
+                            const [h, m] = sc.time.split(":");
+                            const dayTitle = activeDate ? format(activeDate, "EEEE d. MMM", { locale: nb }) : effective;
+                            setNativeClockAlarm({
+                              hour: h,
+                              minutes: m,
+                              message: `Vakt: ${effective} (${dayTitle})`,
+                              skipUi: false,
+                            });
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={{ fontSize: 11.5, fontWeight: "700", color: isDark ? "#93c5fd" : "#1d4ed8" }}>
+                            📱 Still vekkeklokke i Klokke-appen
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
                     );
                   }
                   return null;

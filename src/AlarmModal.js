@@ -17,6 +17,9 @@ import {
   calculateUpcomingAlarms,
   triggerTestAlarm,
   DEFAULT_ALARM_CONFIG,
+  getNextUpcomingShiftAlarm,
+  setNativeClockAlarm,
+  openNativeClockApp,
 } from "./alarmService";
 
 const SHIFTS_WITH_ALARM = [
@@ -121,6 +124,28 @@ const AlarmModal = ({
     daysAhead: 7,
   });
 
+  // Finn neste komande vakt med vekketid
+  const nextAlarm = getNextUpcomingShiftAlarm({
+    shiftGroup,
+    overrides,
+    alarmConfig: localConfig,
+  });
+
+  const handleSetNativeAlarm = async (targetItem) => {
+    const item = targetItem || nextAlarm;
+    if (!item?.alarmTime) {
+      Alert.alert("Ingen vekketid", "Fann ingen aktiv vekketid for denne vakta.");
+      return;
+    }
+    const [h, m] = item.alarmTime.split(":");
+    await setNativeClockAlarm({
+      hour: h,
+      minutes: m,
+      message: `Vakt: ${item.shift} (${item.dayName})`,
+      skipUi: false,
+    });
+  };
+
   return (
     <Modal
       visible={visible}
@@ -190,6 +215,61 @@ const AlarmModal = ({
                 trackColor={{ false: theme.cardBorder, true: "#0284c7" }}
                 thumbColor={localConfig.enabled ? "#ffffff" : "#f4f3f4"}
               />
+            </View>
+
+            {/* HURTIGKNAPP: STILL I TELEFONEN SI KLOKKE-APP */}
+            <View
+              style={[
+                styles.nativeClockCard,
+                {
+                  backgroundColor: isDark ? "#0f172a" : "#f0fdf4",
+                  borderColor: isDark ? "#1e293b" : "#bbf7d0",
+                },
+              ]}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <Text style={{ fontSize: 16 }}>📱</Text>
+                <Text style={[styles.nativeClockTitle, { color: isDark ? "#38bdf8" : "#15803d" }]}>
+                  Telefonen si Klokke-app (Ekte vekkeklokke)
+                </Text>
+              </View>
+              <Text style={[styles.nativeClockSubtitle, { color: theme.textSecondary }]}>
+                Still inn vekkeklokke i Samsung / Google Klokke med full alarmlyd og slumring:
+              </Text>
+
+              {nextAlarm ? (
+                <View style={styles.nativeClockNextBox}>
+                  <Text style={[styles.nativeClockNextLabel, { color: theme.textPrimary }]}>
+                    Neste vakt:{" "}
+                    <Text style={{ fontWeight: "bold" }}>
+                      {nextAlarm.dayName} ({nextAlarm.shift})
+                    </Text>
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.nativeClockSetBtn}
+                    onPress={() => handleSetNativeAlarm(nextAlarm)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.nativeClockSetBtnText}>
+                      ⏰ Still vekkeklokke for neste vakt (kl. {nextAlarm.alarmTime})
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <Text style={[styles.nativeClockMuted, { color: theme.textMuted }]}>
+                  Ingen kommande vakt med aktiv vekketid dei neste dagane.
+                </Text>
+              )}
+
+              <TouchableOpacity
+                style={[styles.nativeClockOpenBtn, { borderColor: theme.cardBorder }]}
+                onPress={openNativeClockApp}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.nativeClockOpenBtnText, { color: theme.textSecondary }]}>
+                  🕒 Opna Klokke-appen på mobilen
+                </Text>
+              </TouchableOpacity>
             </View>
 
             {/* TIDSPUNKT PER VAKTTYPE */}
@@ -304,10 +384,22 @@ const AlarmModal = ({
 
                     <View>
                       {item.alarmActive ? (
-                        <View style={[styles.activeAlarmBadge, { backgroundColor: isDark ? "#14532d" : "#dcfce7" }]}>
-                          <Text style={[styles.activeAlarmText, { color: isDark ? "#86efac" : "#15803d" }]}>
-                            ⏰ {item.alarmTime}
-                          </Text>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                          <View style={[styles.activeAlarmBadge, { backgroundColor: isDark ? "#14532d" : "#dcfce7" }]}>
+                            <Text style={[styles.activeAlarmText, { color: isDark ? "#86efac" : "#15803d" }]}>
+                              ⏰ {item.alarmTime}
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            style={[styles.smallClockBtn, { backgroundColor: isDark ? "#0369a1" : "#e0f2fe" }]}
+                            onPress={() => handleSetNativeAlarm(item)}
+                            activeOpacity={0.7}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          >
+                            <Text style={[styles.smallClockBtnText, { color: isDark ? "#e0f2fe" : "#0369a1" }]}>
+                              📱 Still
+                            </Text>
+                          </TouchableOpacity>
                         </View>
                       ) : item.isFerie ? (
                         <Text style={[styles.inactiveAlarmText, { color: "#06b6d4" }]}>
@@ -532,6 +624,68 @@ const styles = StyleSheet.create({
   saveBtnText: {
     color: "#ffffff",
     fontSize: 14,
+    fontWeight: "700",
+  },
+  nativeClockCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  nativeClockTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  nativeClockSubtitle: {
+    fontSize: 11.5,
+    lineHeight: 16,
+    marginBottom: 10,
+  },
+  nativeClockNextBox: {
+    marginBottom: 8,
+  },
+  nativeClockNextLabel: {
+    fontSize: 12.5,
+    marginBottom: 6,
+  },
+  nativeClockSetBtn: {
+    backgroundColor: "#0284c7",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  nativeClockSetBtnText: {
+    color: "#ffffff",
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  nativeClockOpenBtn: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 7,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
+  },
+  nativeClockOpenBtnText: {
+    fontSize: 11.5,
+    fontWeight: "600",
+  },
+  nativeClockMuted: {
+    fontSize: 11.5,
+    fontStyle: "italic",
+    marginBottom: 6,
+  },
+  smallClockBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 5,
+  },
+  smallClockBtnText: {
+    fontSize: 10.5,
     fontWeight: "700",
   },
 });

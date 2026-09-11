@@ -345,3 +345,89 @@ export const triggerTestAlarm = async () => {
     return false;
   }
 };
+
+/**
+ * Finn neste komande vakt som har alarm aktivert
+ */
+export const getNextUpcomingShiftAlarm = ({
+  shiftGroup = 1,
+  overrides = {},
+  alarmConfig = DEFAULT_ALARM_CONFIG,
+}) => {
+  const upcoming = calculateUpcomingAlarms({
+    shiftGroup,
+    overrides,
+    alarmConfig,
+    daysAhead: 7,
+  });
+
+  return upcoming.find((item) => item.alarmActive && item.alarmDateTime) || null;
+};
+
+/**
+ * Still alarm direkte i telefonen sin standard Klokke-app (Samsung Klokke / Google Klokke)
+ */
+export const setNativeClockAlarm = async ({
+  hour,
+  minutes,
+  message = "Skiftkalender",
+  skipUi = false,
+}) => {
+  if (Platform.OS !== "android") {
+    Alert.alert(
+      "Berre tilgjengeleg på Android",
+      "Kopling til den innebygde Klokke-appen er førebels berre tilgjengeleg på Android-einingar."
+    );
+    return false;
+  }
+
+  try {
+    let IntentLauncher;
+    try {
+      IntentLauncher = require("expo-intent-launcher");
+    } catch {
+      Alert.alert(
+        "Krev nytt bygg",
+        "Kopling til Klokke-appen krev eit oppdatert app-bygg (APK) med expo-intent-launcher."
+      );
+      return false;
+    }
+
+    if (!IntentLauncher?.startActivityAsync) {
+      Alert.alert("Feil", "Klarte ikkje å starte Android Intent-launcher.");
+      return false;
+    }
+
+    await IntentLauncher.startActivityAsync("android.intent.action.SET_ALARM", {
+      extra: {
+        "android.intent.extra.alarm.HOUR": Number(hour),
+        "android.intent.extra.alarm.MINUTES": Number(minutes),
+        "android.intent.extra.alarm.MESSAGE": message,
+        "android.intent.extra.alarm.SKIP_UI": Boolean(skipUi),
+      },
+    });
+    return true;
+  } catch (err) {
+    console.warn("Klarte ikkje å stille alarm i Klokke-appen:", err);
+    Alert.alert(
+      "Kunne ikkje stille alarm",
+      "Sjekk at mobilen har ein standard Klokke-app installert (t.d. Google Klokke eller Samsung Klokke)."
+    );
+    return false;
+  }
+};
+
+/**
+ * Opne telefonen sin standard Klokke-app
+ */
+export const openNativeClockApp = async () => {
+  if (Platform.OS !== "android") return;
+  try {
+    const IntentLauncher = require("expo-intent-launcher");
+    if (IntentLauncher?.startActivityAsync) {
+      await IntentLauncher.startActivityAsync("android.intent.action.SHOW_ALARMS");
+    }
+  } catch (err) {
+    console.warn("Kunne ikkje opne Klokke-appen:", err);
+  }
+};
