@@ -22,37 +22,71 @@ export const DEFAULT_ALARM_CONFIG = {
   snoozeMinutes: 10,
 };
 
-// Konfigurer at varsler alltid visest og lagar lyd sjølv om appen er open
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+/**
+ * Sjekkar om Notifications-modulen er tilgjengeleg i dette bygget (f.eks. ikkje web eller manglande native module)
+ */
+export const isNotificationsAvailable = () => {
+  try {
+    return (
+      Platform.OS !== "web" &&
+      Boolean(
+        Notifications &&
+        typeof Notifications.scheduleNotificationAsync === "function" &&
+        typeof Notifications.getPermissionsAsync === "function"
+      )
+    );
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Trygg registrering av notification handler
+ */
+let isHandlerSet = false;
+export const ensureNotificationHandler = () => {
+  if (isHandlerSet) return;
+  try {
+    if (Notifications && typeof Notifications.setNotificationHandler === "function") {
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowAlert: true,
+          shouldPlaySound: true,
+          shouldSetBadge: true,
+        }),
+      });
+      isHandlerSet = true;
+    }
+  } catch (err) {
+    console.warn("Klarte ikkje å setje notification handler:", err);
+  }
+};
 
 /**
  * Opprett Android-varslingskanal med høg prioritet og alarm-lyd
  */
 export const setupNotificationChannel = async () => {
-  if (Platform.OS === "android") {
-    try {
+  if (Platform.OS !== "android" || !isNotificationsAvailable()) return;
+
+  try {
+    ensureNotificationHandler();
+    if (Notifications?.setNotificationChannelAsync) {
       await Notifications.setNotificationChannelAsync(ALARM_CHANNEL_ID, {
         name: "Skiftalarm",
         description: "Automatiske alarmar og vekking tilpassa turnus",
-        importance: Notifications.AndroidImportance.MAX,
+        importance: Notifications?.AndroidImportance?.MAX || 5,
         vibrationPattern: [0, 600, 300, 600, 300, 600],
         sound: "default",
         enableVibrate: true,
         showBadge: true,
         audioAttributes: {
-          usage: Notifications.AndroidAudioUsage.ALARM,
-          contentType: Notifications.AndroidAudioContentType.SONIFICATION,
+          usage: Notifications?.AndroidAudioUsage?.ALARM || 4,
+          contentType: Notifications?.AndroidAudioContentType?.SONIFICATION || 4,
         },
       });
-    } catch (err) {
-      console.warn("Kunne ikkje opprette notification channel:", err);
     }
+  } catch (err) {
+    console.warn("Kunne ikkje opprette notification channel:", err);
   }
 };
 
@@ -60,7 +94,7 @@ export const setupNotificationChannel = async () => {
  * Ber om varslingsløyve frå brukaren
  */
 export const requestNotificationPermissions = async () => {
-  if (Platform.OS === "web") return false;
+  if (!isNotificationsAvailable()) return false;
 
   try {
     await setupNotificationChannel();
@@ -153,11 +187,18 @@ export const rescheduleAllShiftAlarms = async ({
   overrides = {},
   alarmConfig = DEFAULT_ALARM_CONFIG,
 }) => {
-  if (Platform.OS === "web") return [];
+  if (!isNotificationsAvailable()) {
+    console.warn("Varslingsteneste ikkje tilgjengeleg i dette bygget.");
+    return [];
+  }
 
   try {
+    ensureNotificationHandler();
+
     // 1. Avbryt tidlegare planlagde varsler
-    await Notifications.cancelAllScheduledNotificationsAsync();
+    if (Notifications?.cancelAllScheduledNotificationsAsync) {
+      await Notifications.cancelAllScheduledNotificationsAsync();
+    }
 
     // Viss hovudbrytar er slått av, stoppar me her
     if (!alarmConfig.enabled) {
@@ -184,16 +225,19 @@ export const rescheduleAllShiftAlarms = async ({
     for (const item of upcoming) {
       if (item.alarmActive && item.alarmDateTime && !isPast(item.alarmDateTime)) {
         try {
+          const triggerType = Notifications?.SchedulableTriggerInputTypes?.DATE || "date";
+          const priorityVal = Notifications?.AndroidNotificationPriority?.MAX || "max";
+
           const id = await Notifications.scheduleNotificationAsync({
             content: {
               title: `⏰ Vekkeklokke (${item.shift})`,
               body: `Tid for å stå opp! Vakta di (${item.shift}) er registrert i dag.`,
               sound: "default",
-              priority: Notifications.AndroidNotificationPriority.MAX,
+              priority: priorityVal,
               vibrate: [0, 600, 300, 600, 300, 600],
             },
             trigger: {
-              type: Notifications.SchedulableTriggerInputTypes.DATE,
+              type: triggerType,
               date: item.alarmDateTime,
               channelId: ALARM_CHANNEL_ID,
             },
@@ -217,6 +261,14 @@ export const rescheduleAllShiftAlarms = async ({
  * Test alarm med eitt (ring etter 2 sekund)
  */
 export const triggerTestAlarm = async () => {
+  if (!isNotificationsAvailable()) {
+    Alert.alert(
+      "Krev nytt app-bygg",
+      "Vekkeklokke og alarm-varsler krev eit nytt APK-bygg med varslingsstøtte. Bygg ny versjon med 'eas build' for å ta denne funksjonen i bruk på telefonen."
+    );
+    return false;
+  }
+
   const hasPermission = await requestNotificationPermissions();
   if (!hasPermission) {
     Alert.alert(
@@ -227,16 +279,20 @@ export const triggerTestAlarm = async () => {
   }
 
   try {
+    ensureNotificationHandler();
+    const triggerType = Notifications?.SchedulableTriggerInputTypes?.TIME_INTERVAL || "timeInterval";
+    const priorityVal = Notifications?.AndroidNotificationPriority?.MAX || "max";
+
     await Notifications.scheduleNotificationAsync({
       content: {
         title: "⏰ Test-vekkeklokke: Skiftkalender",
         body: "Dette er slik skiftalarmen din høyrest ut!",
         sound: "default",
-        priority: Notifications.AndroidNotificationPriority.MAX,
+        priority: priorityVal,
         vibrate: [0, 600, 300, 600],
       },
       trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+        type: triggerType,
         seconds: 2,
         channelId: ALARM_CHANNEL_ID,
       },

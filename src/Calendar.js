@@ -136,14 +136,16 @@ const Calendar = ({ isDark, toggleTheme }) => {
 
   // Resynkroniser alarmar automatisk ved vaktendringar
   useEffect(() => {
-    if (alarmConfig.enabled) {
+    if (alarmConfig?.enabled) {
       rescheduleAllShiftAlarms({
         shiftGroup,
         overrides,
         alarmConfig,
+      }).catch((err) => {
+        console.warn("Kunne ikkje resynkronisere alarmar:", err);
       });
     }
-  }, [shiftGroup, overrides, alarmConfig.enabled]);
+  }, [shiftGroup, overrides, alarmConfig?.enabled]);
 
   // Oppdater heimeskjerm-widget når skiftgruppe, overstyringar eller tider endrast
   useEffect(() => {
