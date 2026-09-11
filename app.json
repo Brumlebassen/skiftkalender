@@ -19,7 +19,11 @@
       "package": "com.brunlebassen.skiftkalender",
       "permissions": [
         "READ_CALENDAR",
-        "WRITE_CALENDAR"
+        "WRITE_CALENDAR",
+        "POST_NOTIFICATIONS",
+        "SCHEDULE_EXACT_ALARM",
+        "USE_EXACT_ALARM",
+        "VIBRATE"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -39,6 +43,7 @@
     "plugins": [
       "expo-calendar",
       "expo-sharing",
+      "expo-notifications",
       [
         "react-native-android-widget",
         {

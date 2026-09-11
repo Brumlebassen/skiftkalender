@@ -32,6 +32,7 @@ import SettingsModal, { DEFAULT_SHIFT_TIMES } from "./SettingsModal";
 import FerieModal from "./FerieModal";
 import YearOverviewModal from "./YearOverviewModal";
 import SyncShareModal from "./SyncShareModal";
+import AlarmModal from "./AlarmModal";
 import {
   getShiftForDate,
   ALL_SHIFTS,
@@ -42,6 +43,11 @@ import {
   COMPARE_SHIFTS_KEY,
 } from "./shiftCalculator";
 import { updateHomeScreenWidget } from "./widgets/widgetSyncService";
+import {
+  DEFAULT_ALARM_CONFIG,
+  SHIFT_ALARM_CONFIG_KEY,
+  rescheduleAllShiftAlarms,
+} from "./alarmService";
 
 const Calendar = ({ isDark, toggleTheme }) => {
   const theme = getTheme(isDark);
@@ -51,6 +57,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
   const [comments, setComments] = useState({});
   const [overrides, setOverrides] = useState({});
   const [shiftTimes, setShiftTimes] = useState(DEFAULT_SHIFT_TIMES);
+  const [alarmConfig, setAlarmConfig] = useState(DEFAULT_ALARM_CONFIG);
 
   // Samanlikningsmodus
   const [isCompareMode, setIsCompareMode] = useState(false);
@@ -61,6 +68,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
   const [showFerieModal, setShowFerieModal] = useState(false);
   const [showYearOverview, setShowYearOverview] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
+  const [showAlarmModal, setShowAlarmModal] = useState(false);
   const [showDayModal, setShowDayModal] = useState(false);
 
   const handleSelectDateFromOverview = (dateObj) => {
@@ -89,12 +97,14 @@ const Calendar = ({ isDark, toggleTheme }) => {
           savedOverrides,
           savedTimes,
           savedCompare,
+          savedAlarm,
         ] = await Promise.all([
           AsyncStorage.getItem(SHIFT_COMMENTS_KEY),
           AsyncStorage.getItem(SELECTED_SHIFT_KEY),
           AsyncStorage.getItem(SHIFT_OVERRIDES_KEY),
           AsyncStorage.getItem(SHIFT_TIMES_KEY),
           AsyncStorage.getItem(COMPARE_SHIFTS_KEY),
+          AsyncStorage.getItem(SHIFT_ALARM_CONFIG_KEY),
         ]);
 
         if (savedComments) setComments(JSON.parse(savedComments));
@@ -102,12 +112,38 @@ const Calendar = ({ isDark, toggleTheme }) => {
         if (savedOverrides) setOverrides(JSON.parse(savedOverrides));
         if (savedTimes) setShiftTimes(JSON.parse(savedTimes));
         if (savedCompare) setCompareGroups(JSON.parse(savedCompare));
+        if (savedAlarm) setAlarmConfig(JSON.parse(savedAlarm));
       } catch (err) {
         console.warn("Kunne ikke laste lagrede data:", err);
       }
     };
     loadSavedData();
   }, []);
+
+  const handleSaveAlarmConfig = async (newConfig) => {
+    setAlarmConfig(newConfig);
+    try {
+      await AsyncStorage.setItem(SHIFT_ALARM_CONFIG_KEY, JSON.stringify(newConfig));
+      await rescheduleAllShiftAlarms({
+        shiftGroup,
+        overrides,
+        alarmConfig: newConfig,
+      });
+    } catch (err) {
+      console.warn("Kunne ikkje lagre alarm-konfigurasjon:", err);
+    }
+  };
+
+  // Resynkroniser alarmar automatisk ved vaktendringar
+  useEffect(() => {
+    if (alarmConfig.enabled) {
+      rescheduleAllShiftAlarms({
+        shiftGroup,
+        overrides,
+        alarmConfig,
+      });
+    }
+  }, [shiftGroup, overrides, alarmConfig.enabled]);
 
   // Oppdater heimeskjerm-widget når skiftgruppe, overstyringar eller tider endrast
   useEffect(() => {
@@ -372,6 +408,28 @@ const Calendar = ({ isDark, toggleTheme }) => {
           >
             <Text style={[styles.toolbarPillText, { color: theme.textPrimary }]}>
               📲 Synk & del
+            </Text>
+          </TouchableOpacity>
+
+          {/* Smart vekkeklokke / skiftalarm */}
+          <TouchableOpacity
+            style={[
+              styles.toolbarPill,
+              { backgroundColor: alarmConfig?.enabled ? (isDark ? "#1e3a8a" : "#dbeafe") : theme.inactiveButtonBg },
+            ]}
+            onPress={() => setShowAlarmModal(true)}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.toolbarPillText,
+                {
+                  color: alarmConfig?.enabled ? (isDark ? "#93c5fd" : "#1d4ed8") : theme.textPrimary,
+                  fontWeight: alarmConfig?.enabled ? "bold" : "normal",
+                },
+              ]}
+            >
+              ⏰ {alarmConfig?.enabled ? "Alarm PÅ" : "Alarm"}
             </Text>
           </TouchableOpacity>
 
@@ -798,6 +856,18 @@ const Calendar = ({ isDark, toggleTheme }) => {
         isDark={isDark}
       />
 
+      {/* Smart vekkeklokke / skiftalarm modal */}
+      <AlarmModal
+        visible={showAlarmModal}
+        onClose={() => setShowAlarmModal(false)}
+        alarmConfig={alarmConfig}
+        onSaveAlarmConfig={handleSaveAlarmConfig}
+        shiftGroup={shiftGroup}
+        overrides={overrides}
+        theme={theme}
+        isDark={isDark}
+      />
+
       {/* Dag-modal for vaktbytte, overtid, ferie og notater */}
       <Modal
         visible={showDayModal}
@@ -831,6 +901,26 @@ const Calendar = ({ isDark, toggleTheme }) => {
                     ⏰ Arbeidstid: {currentModalTime}
                   </Text>
                 ) : null}
+                {(() => {
+                  if (!alarmConfig?.enabled) return null;
+                  const effective = isFerie ? "Ferie" : (bytteShift || originalShift);
+                  if (effective === "Fri" || effective === "Ferie") {
+                    return (
+                      <Text style={[styles.modalTimeText, { color: theme.textMuted, marginTop: 4 }]}>
+                        🔕 Skiftalarm: Ingen alarm ({effective})
+                      </Text>
+                    );
+                  }
+                  const sc = alarmConfig.shifts?.[effective];
+                  if (sc?.enabled && sc?.time) {
+                    return (
+                      <Text style={[styles.modalTimeText, { color: isDark ? "#93c5fd" : "#2563eb", fontWeight: "600", marginTop: 4 }]}>
+                        ⏰ Skiftalarm: kl. {sc.time} ({effective})
+                      </Text>
+                    );
+                  }
+                  return null;
+                })()}
               </View>
 
               {/* 1. FERIE-VELGER */}
