@@ -235,6 +235,7 @@ export const syncShiftsToDevice = async ({
   shiftTimes,
   includeFridager = false,
   targetCalendarId = null,
+  activePlan = null,
 }) => {
   const hasPermission = await requestCalendarPermissions();
   if (!hasPermission) {
@@ -267,7 +268,7 @@ export const syncShiftsToDevice = async ({
     const dateStr = format(cur, "yyyy-MM-dd");
     const dateKey = `${shiftGroup}-${dateStr}`;
 
-    const rawShift = getShiftForDate(cur, shiftGroup);
+    const rawShift = getShiftForDate(cur, shiftGroup, activePlan);
     const override = overrides?.[dateKey];
 
     const isFerie = Boolean(override?.isFerie);
@@ -375,6 +376,7 @@ export const shareAsIcsFile = async ({
   overrides,
   comments,
   shiftTimes,
+  activePlan = null,
 }) => {
   let icsContent = [
     "BEGIN:VCALENDAR",
@@ -395,7 +397,7 @@ export const shareAsIcsFile = async ({
     const dateStr = format(cur, "yyyy-MM-dd");
     const dateKey = `${shiftGroup}-${dateStr}`;
 
-    const rawShift = getShiftForDate(cur, shiftGroup);
+    const rawShift = getShiftForDate(cur, shiftGroup, activePlan);
     const override = overrides?.[dateKey];
 
     const isFerie = Boolean(override?.isFerie);
@@ -428,26 +430,36 @@ export const shareAsIcsFile = async ({
     if (activeShift !== "Fri") {
       icsContent.push("BEGIN:VEVENT");
       icsContent.push(`UID:${dateKey}-${Date.now()}@skiftkalender.app`);
-      icsContent.push(`SUMMARY:${title}`);
+      icsContent.push(`DTSTAMP:${formatIcsDate(new Date())}Z`);
+
+      let dtStart = "";
+      let dtEnd = "";
 
       if (isAllDay) {
-        icsContent.push(`DTSTART;VALUE=DATE:${formatIcsDayOnly(cur)}`);
-        icsContent.push(`DTEND;VALUE=DATE:${formatIcsDayOnly(addDays(cur, 1))}`);
+        dtStart = `;VALUE=DATE:${formatIcsDayOnly(cur)}`;
+        dtEnd = `;VALUE=DATE:${formatIcsDayOnly(addDays(cur, 1))}`;
       } else {
         const timeConfig = shiftTimes?.[activeShift];
         const parsed = parseShiftTimesToDates(cur, timeConfig);
+
         if (parsed) {
-          icsContent.push(`DTSTART:${formatIcsDate(parsed.startDate)}`);
-          icsContent.push(`DTEND:${formatIcsDate(parsed.endDate)}`);
+          dtStart = `:${formatIcsDate(parsed.startDate)}`;
+          dtEnd = `:${formatIcsDate(parsed.endDate)}`;
         } else {
-          icsContent.push(`DTSTART;VALUE=DATE:${formatIcsDayOnly(cur)}`);
-          icsContent.push(`DTEND;VALUE=DATE:${formatIcsDayOnly(addDays(cur, 1))}`);
+          dtStart = `;VALUE=DATE:${formatIcsDayOnly(cur)}`;
+          dtEnd = `;VALUE=DATE:${formatIcsDayOnly(addDays(cur, 1))}`;
         }
       }
 
-      let desc = `Skiftgruppe ${shiftGroup}`;
-      if (comment) desc += ` - ${comment}`;
-      icsContent.push(`DESCRIPTION:${desc}`);
+      icsContent.push(`DTSTART${dtStart}`);
+      icsContent.push(`DTEND${dtEnd}`);
+      icsContent.push(`SUMMARY:${title}`);
+
+      if (comment) {
+        icsContent.push(`DESCRIPTION:${comment.replace(/\n/g, "\\n")}`);
+      }
+
+      icsContent.push("STATUS:CONFIRMED");
       icsContent.push("END:VEVENT");
     }
 
@@ -484,6 +496,7 @@ export const shareMonthAsText = async ({
   getShiftForDate,
   overrides,
   comments,
+  activePlan = null,
 }) => {
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
@@ -503,7 +516,7 @@ export const shareMonthAsText = async ({
     const dateStr = format(cur, "yyyy-MM-dd");
     const dateKey = `${shiftGroup}-${dateStr}`;
 
-    const rawShift = getShiftForDate(cur, shiftGroup);
+    const rawShift = getShiftForDate(cur, shiftGroup, activePlan);
     const override = overrides?.[dateKey];
 
     let shift = rawShift;

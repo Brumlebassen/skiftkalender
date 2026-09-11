@@ -33,6 +33,7 @@ import FerieModal from "./FerieModal";
 import YearOverviewModal from "./YearOverviewModal";
 import SyncShareModal from "./SyncShareModal";
 import AlarmModal from "./AlarmModal";
+import TurnusBuilderModal from "./TurnusBuilderModal";
 import {
   getShiftForDate,
   ALL_SHIFTS,
@@ -41,6 +42,11 @@ import {
   SHIFT_OVERRIDES_KEY,
   SHIFT_TIMES_KEY,
   COMPARE_SHIFTS_KEY,
+  ACTIVE_SHIFT_PLAN_KEY,
+  CUSTOM_SHIFT_PLANS_KEY,
+  PRESET_SHIFT_PLANS,
+  getShiftTypesForPlan,
+  getGroupsForPlan,
 } from "./shiftCalculator";
 import { updateHomeScreenWidget } from "./widgets/widgetSyncService";
 import {
@@ -60,6 +66,11 @@ const Calendar = ({ isDark, toggleTheme }) => {
   const [shiftTimes, setShiftTimes] = useState(DEFAULT_SHIFT_TIMES);
   const [alarmConfig, setAlarmConfig] = useState(DEFAULT_ALARM_CONFIG);
 
+  // Turnusplanar (Standard, forhåndsdefinerte og eigendefinerte)
+  const [activePlan, setActivePlan] = useState(PRESET_SHIFT_PLANS[0]);
+  const [customPlans, setCustomPlans] = useState([]);
+  const [showTurnusModal, setShowTurnusModal] = useState(false);
+
   // Samanlikningsmodus
   const [isCompareMode, setIsCompareMode] = useState(false);
   const [compareGroups, setCompareGroups] = useState([3, 1]);
@@ -74,7 +85,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
 
   const handleSelectDateFromOverview = (dateObj) => {
     setCurrentMonth(dateObj);
-    const rawShift = getShiftForDate(dateObj, shiftGroup);
+    const rawShift = getShiftForDate(dateObj, shiftGroup, activePlan);
     const dateStr = format(dateObj, "yyyy-MM-dd");
     const dateKey = `${shiftGroup}-${dateStr}`;
     handleDayPress(dateObj, rawShift, dateKey);
@@ -99,6 +110,8 @@ const Calendar = ({ isDark, toggleTheme }) => {
           savedTimes,
           savedCompare,
           savedAlarm,
+          savedPlanStr,
+          savedCustomPlansStr,
         ] = await Promise.all([
           AsyncStorage.getItem(SHIFT_COMMENTS_KEY),
           AsyncStorage.getItem(SELECTED_SHIFT_KEY),
@@ -106,20 +119,97 @@ const Calendar = ({ isDark, toggleTheme }) => {
           AsyncStorage.getItem(SHIFT_TIMES_KEY),
           AsyncStorage.getItem(COMPARE_SHIFTS_KEY),
           AsyncStorage.getItem(SHIFT_ALARM_CONFIG_KEY),
+          AsyncStorage.getItem(ACTIVE_SHIFT_PLAN_KEY),
+          AsyncStorage.getItem(CUSTOM_SHIFT_PLANS_KEY),
         ]);
 
         if (savedComments) setComments(JSON.parse(savedComments));
-        if (savedGroup) setShiftGroup(Number(savedGroup));
         if (savedOverrides) setOverrides(JSON.parse(savedOverrides));
         if (savedTimes) setShiftTimes(JSON.parse(savedTimes));
         if (savedCompare) setCompareGroups(JSON.parse(savedCompare));
         if (savedAlarm) setAlarmConfig(JSON.parse(savedAlarm));
+
+        let loadedCustomPlans = [];
+        if (savedCustomPlansStr) {
+          try {
+            loadedCustomPlans = JSON.parse(savedCustomPlansStr);
+            setCustomPlans(loadedCustomPlans);
+          } catch {}
+        }
+
+        if (savedPlanStr) {
+          try {
+            const parsedPlan = JSON.parse(savedPlanStr);
+            // Finn full plan frå preset eller custom dersom tilgjengeleg
+            const match =
+              PRESET_SHIFT_PLANS.find((p) => p.id === parsedPlan.id) ||
+              loadedCustomPlans.find((p) => p.id === parsedPlan.id) ||
+              parsedPlan;
+            setActivePlan(match);
+          } catch {}
+        }
+
+        if (savedGroup) {
+          setShiftGroup(Number(savedGroup));
+        }
       } catch (err) {
         console.warn("Kunne ikke laste lagrede data:", err);
       }
     };
     loadSavedData();
   }, []);
+
+  const handleSelectPlan = async (plan) => {
+    setActivePlan(plan);
+    // Sjekk om noverande skiftgruppe finst i den nye planen, viss ikkje vel første gruppe
+    const groups = getGroupsForPlan(plan);
+    if (!groups.some((g) => Number(g.id) === Number(shiftGroup))) {
+      const firstId = Number(groups[0]?.id || 1);
+      setShiftGroup(firstId);
+      await AsyncStorage.setItem(SELECTED_SHIFT_KEY, firstId.toString());
+    }
+
+    // Oppdater standardtider dersom planen har eigne tider
+    if (plan.shiftTypes && plan.shiftTypes.length > 0) {
+      const updatedTimes = { ...shiftTimes };
+      plan.shiftTypes.forEach((st) => {
+        if (st.defaultTime) {
+          updatedTimes[st.code] = st.defaultTime;
+        }
+      });
+      setShiftTimes(updatedTimes);
+      await AsyncStorage.setItem(SHIFT_TIMES_KEY, JSON.stringify(updatedTimes));
+    }
+
+    try {
+      await AsyncStorage.setItem(ACTIVE_SHIFT_PLAN_KEY, JSON.stringify(plan));
+    } catch (err) {
+      console.warn("Kunne ikkje lagre aktiv turnusplan:", err);
+    }
+  };
+
+  const handleSaveCustomPlan = async (newPlan) => {
+    const updated = [...customPlans.filter((p) => p.id !== newPlan.id), newPlan];
+    setCustomPlans(updated);
+    try {
+      await AsyncStorage.setItem(CUSTOM_SHIFT_PLANS_KEY, JSON.stringify(updated));
+    } catch (err) {
+      console.warn("Kunne ikkje lagre eigendefinert turnusplan:", err);
+    }
+  };
+
+  const handleDeleteCustomPlan = async (planId) => {
+    const updated = customPlans.filter((p) => p.id !== planId);
+    setCustomPlans(updated);
+    try {
+      await AsyncStorage.setItem(CUSTOM_SHIFT_PLANS_KEY, JSON.stringify(updated));
+      if (activePlan?.id === planId) {
+        handleSelectPlan(PRESET_SHIFT_PLANS[0]);
+      }
+    } catch (err) {
+      console.warn("Kunne ikkje slette turnusplan:", err);
+    }
+  };
 
   const handleSaveAlarmConfig = async (newConfig) => {
     setAlarmConfig(newConfig);
@@ -142,16 +232,17 @@ const Calendar = ({ isDark, toggleTheme }) => {
         shiftGroup,
         overrides,
         alarmConfig,
+        activePlan,
       }).catch((err) => {
         console.warn("Kunne ikkje resynkronisere alarmar:", err);
       });
     }
-  }, [shiftGroup, overrides, alarmConfig?.enabled]);
+  }, [shiftGroup, overrides, alarmConfig?.enabled, activePlan]);
 
-  // Oppdater heimeskjerm-widget når skiftgruppe, overstyringar eller tider endrast
+  // Oppdater heimeskjerm-widget når skiftgruppe, overstyringar, tider eller plan endrast
   useEffect(() => {
     updateHomeScreenWidget();
-  }, [shiftGroup, overrides, shiftTimes, isDark]);
+  }, [shiftGroup, overrides, shiftTimes, isDark, activePlan]);
 
   // PanResponder for sveiping mellom måneder (swipe gestures)
   const panResponder = useRef(
@@ -403,6 +494,28 @@ const Calendar = ({ isDark, toggleTheme }) => {
             </Text>
           </TouchableOpacity>
 
+          {/* Turnus-byggjar / Turnus-veljar */}
+          <TouchableOpacity
+            style={[
+              styles.toolbarPill,
+              { backgroundColor: activePlan?.id !== "standard-35" ? (isDark ? "#14532d" : "#dcfce7") : theme.inactiveButtonBg },
+            ]}
+            onPress={() => setShowTurnusModal(true)}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.toolbarPillText,
+                {
+                  color: activePlan?.id !== "standard-35" ? (isDark ? "#86efac" : "#15803d") : theme.textPrimary,
+                  fontWeight: activePlan?.id !== "standard-35" ? "bold" : "normal",
+                },
+              ]}
+            >
+              🏢 {activePlan?.shortName || "Turnus"}
+            </Text>
+          </TouchableOpacity>
+
           {/* Synk & del */}
           <TouchableOpacity
             style={[styles.toolbarPill, { backgroundColor: theme.inactiveButtonBg }]}
@@ -476,20 +589,29 @@ const Calendar = ({ isDark, toggleTheme }) => {
       >
         {/* Skiftvelger */}
         <View style={[styles.selectorCard, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}>
-          <Text style={[styles.selectorTitle, { color: theme.textMuted }]}>
-            {isCompareMode
-              ? "Vel skift å samanlikne (trykk på fleire):"
-              : "Vel skiftgruppe:"}
-          </Text>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <Text style={[styles.selectorTitle, { color: theme.textMuted, marginBottom: 0 }]}>
+              {isCompareMode
+                ? "Vel lag å samanlikne:"
+                : "Vel skiftgruppe / lag:"}
+            </Text>
+            <TouchableOpacity onPress={() => setShowTurnusModal(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={{ fontSize: 11, color: isDark ? "#38bdf8" : "#0284c7", fontWeight: "600" }}>
+                {activePlan?.shortName || activePlan?.name || "Endre turnus"} ▾
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           <View style={styles.shiftButtonGroup}>
-            {[1, 2, 3, 4, 5].map((num) => {
+            {getGroupsForPlan(activePlan).map((grpItem) => {
+              const num = Number(grpItem.id);
               const isSelected = isCompareMode
                 ? compareGroups.includes(num)
-                : shiftGroup === num;
+                : Number(shiftGroup) === num;
 
               return (
                 <TouchableOpacity
-                  key={num}
+                  key={grpItem.id}
                   style={[
                     styles.shiftButton,
                     { backgroundColor: theme.inactiveButtonBg },
@@ -507,8 +629,9 @@ const Calendar = ({ isDark, toggleTheme }) => {
                       styles.shiftButtonText,
                       { color: isSelected ? theme.activeButtonText : theme.inactiveButtonText },
                     ]}
+                    numberOfLines={1}
                   >
-                    Skift {num}
+                    {grpItem.name || `Lag ${num}`}
                   </Text>
                 </TouchableOpacity>
               );
@@ -631,7 +754,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
 
                       <View style={styles.compareShiftsList}>
                         {compareGroups.map((grp) => {
-                          const s = getShiftForDate(d, grp);
+                          const s = getShiftForDate(d, grp, activePlan);
                           const sc = getShiftColor(s, isDark);
                           return (
                             <View
@@ -656,7 +779,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
                 }
 
                 // Enkelt-skift visning
-                const rawShift = getShiftForDate(d, shiftGroup);
+                const rawShift = getShiftForDate(d, shiftGroup, activePlan);
                 const override = overrides[dateKey];
                 const dayIsFerie = Boolean(override?.isFerie);
                 const dayByttet = override?.bytteShift || (override?.shift && !override?.isOvertid ? override.shift : null);
@@ -821,6 +944,20 @@ const Calendar = ({ isDark, toggleTheme }) => {
         shiftTimes={shiftTimes}
         onSaveShiftTimes={handleSaveShiftTimes}
         theme={theme}
+        activePlan={activePlan}
+      />
+
+      {/* Turnus-byggjar modal */}
+      <TurnusBuilderModal
+        visible={showTurnusModal}
+        onClose={() => setShowTurnusModal(false)}
+        activePlan={activePlan}
+        onSelectPlan={handleSelectPlan}
+        customPlans={customPlans}
+        onSaveCustomPlan={handleSaveCustomPlan}
+        onDeleteCustomPlan={handleDeleteCustomPlan}
+        theme={theme}
+        isDark={isDark}
       />
 
       {/* Ferie-modal for heile periodar */}
@@ -857,6 +994,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
         shiftTimes={shiftTimes}
         theme={theme}
         isDark={isDark}
+        activePlan={activePlan}
       />
 
       {/* Smart vekkeklokke / skiftalarm modal */}
@@ -985,7 +1123,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
                     </Text>
                   </View>
                   <View style={styles.chipsRow}>
-                    {ALL_SHIFTS.map((s) => {
+                    {getShiftTypesForPlan(activePlan).map((s) => {
                       const isSelected = bytteShift === s;
                       const sc = getShiftColor(s, isDark);
                       return (
@@ -1026,7 +1164,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
                     </Text>
                   </View>
                   <View style={styles.chipsRow}>
-                    {ALL_SHIFTS.filter((s) => s !== "Fri").map((s) => {
+                    {getShiftTypesForPlan(activePlan).filter((s) => s !== "Fri").map((s) => {
                       const isSelected = overtidShift === s;
                       const sc = getShiftColor(s, isDark);
                       return (

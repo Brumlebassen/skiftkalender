@@ -26,6 +26,7 @@ const SettingsModal = ({
   shiftTimes,
   onSaveShiftTimes,
   theme,
+  activePlan,
 }) => {
   const [localTimes, setLocalTimes] = useState(DEFAULT_SHIFT_TIMES);
 
@@ -48,14 +49,19 @@ const SettingsModal = ({
     onClose();
   };
 
-  const shiftLabels = [
-    { key: "Fm", name: "Formiddag (Fm)" },
-    { key: "Em", name: "Ettermiddag (Em)" },
-    { key: "N", name: "Natt (N)" },
-    { key: "12tFm", name: "12t Formiddag (12tFm)" },
-    { key: "12tN", name: "12t Natt (12tN)" },
-    { key: "Fri", name: "Fridag (Fri)" },
-  ];
+  const shiftLabels = activePlan?.shiftTypes?.length
+    ? activePlan.shiftTypes.map((st) => ({
+        key: st.code,
+        name: `${st.name} (${st.code})`,
+      }))
+    : [
+        { key: "Fm", name: "Formiddag (Fm)" },
+        { key: "Em", name: "Ettermiddag (Em)" },
+        { key: "N", name: "Natt (N)" },
+        { key: "12tFm", name: "12t Formiddag (12tFm)" },
+        { key: "12tN", name: "12t Natt (12tN)" },
+        { key: "Fri", name: "Fridag (Fri)" },
+      ];
 
   return (
     <Modal

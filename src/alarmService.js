@@ -157,6 +157,7 @@ export const calculateUpcomingAlarms = ({
   overrides = {},
   alarmConfig = DEFAULT_ALARM_CONFIG,
   daysAhead = 14,
+  activePlan = null,
 }) => {
   const list = [];
   const today = new Date();
@@ -166,7 +167,7 @@ export const calculateUpcomingAlarms = ({
     const dateStr = format(curDate, "yyyy-MM-dd");
     const dayName = i === 0 ? "I dag" : i === 1 ? "I morgon" : format(curDate, "EEEE d. MMM", { locale: nb });
 
-    const shiftInfo = getEffectiveShiftForDate(curDate, shiftGroup, overrides);
+    const shiftInfo = getEffectiveShiftForDate(curDate, shiftGroup, overrides, activePlan);
     const shift = shiftInfo.activeShift;
     const isFerie = shiftInfo.isFerie;
 
@@ -179,13 +180,12 @@ export const calculateUpcomingAlarms = ({
 
     if (alarmConfig.enabled && isEnabledForShift && !isFerie && shift !== "Fri") {
       timeStr = conf.time;
-      const [h, m] = timeStr.split(":").map(Number);
-      if (!isNaN(h) && !isNaN(m)) {
-        const d = new Date(curDate);
-        d.setHours(h, m, 0, 0);
-        alarmDateTime = d;
+      const [hours, minutes] = timeStr.split(":").map(Number);
+      if (!isNaN(hours) && !isNaN(minutes)) {
+        alarmDateTime = new Date(curDate);
+        alarmDateTime.setHours(hours, minutes, 0, 0);
         // Berre aktiv viss tidspunktet er fram i tid
-        if (!isPast(d)) {
+        if (!isPast(alarmDateTime)) {
           alarmActive = true;
         }
       }
@@ -216,6 +216,7 @@ export const rescheduleAllShiftAlarms = async ({
   shiftGroup,
   overrides = {},
   alarmConfig = DEFAULT_ALARM_CONFIG,
+  activePlan = null,
 }) => {
   if (!isNotificationsAvailable()) {
     console.warn("Varslingsteneste ikkje tilgjengeleg i dette bygget.");
@@ -249,6 +250,7 @@ export const rescheduleAllShiftAlarms = async ({
       overrides,
       alarmConfig,
       daysAhead: 14,
+      activePlan,
     });
 
     const scheduled = [];

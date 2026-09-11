@@ -29,6 +29,7 @@ const SyncShareModal = ({
   shiftTimes,
   theme,
   isDark,
+  activePlan,
 }) => {
   const [syncPeriod, setSyncPeriod] = useState("3months"); // '1month' | '3months' | 'year'
   const [includeFri, setIncludeFri] = useState(false);
@@ -89,6 +90,7 @@ const SyncShareModal = ({
         shiftTimes,
         includeFridager: includeFri,
         targetCalendarId: targetId,
+        activePlan,
       });
 
       setStatusInfo({
@@ -145,6 +147,7 @@ const SyncShareModal = ({
         overrides,
         comments,
         shiftTimes,
+        activePlan,
       });
     } catch (err) {
       if (!err.message?.includes("User cancelled")) {
@@ -163,6 +166,7 @@ const SyncShareModal = ({
         getShiftForDate,
         overrides,
         comments,
+        activePlan,
       });
     } catch (err) {
       Alert.alert("Feil", err.message);

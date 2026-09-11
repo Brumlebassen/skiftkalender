@@ -10,6 +10,8 @@ import {
   SELECTED_SHIFT_KEY,
   SHIFT_OVERRIDES_KEY,
   SHIFT_TIMES_KEY,
+  ACTIVE_SHIFT_PLAN_KEY,
+  PRESET_SHIFT_PLANS,
 } from "../shiftCalculator";
 import { getShiftColor } from "../theme";
 import { DEFAULT_SHIFT_TIMES } from "../SettingsModal";
@@ -27,7 +29,7 @@ export const updateHomeScreenWidget = async () => {
   try {
     // 1. Hent lagra innstillingar frå AsyncStorage
     const savedGroupStr = await AsyncStorage.getItem(SELECTED_SHIFT_KEY);
-    const shiftGroup = savedGroupStr ? parseInt(savedGroupStr, 10) : 3;
+    const shiftGroup = savedGroupStr ? parseInt(savedGroupStr, 10) : 1;
 
     const savedOverridesStr = await AsyncStorage.getItem(SHIFT_OVERRIDES_KEY);
     const overrides = savedOverridesStr ? JSON.parse(savedOverridesStr) : {};
@@ -38,9 +40,17 @@ export const updateHomeScreenWidget = async () => {
     const savedTheme = await AsyncStorage.getItem(THEME_PREF_KEY);
     const isDark = savedTheme === "dark";
 
+    let activePlan = PRESET_SHIFT_PLANS[0];
+    const savedPlanStr = await AsyncStorage.getItem(ACTIVE_SHIFT_PLAN_KEY);
+    if (savedPlanStr) {
+      try {
+        activePlan = JSON.parse(savedPlanStr);
+      } catch {}
+    }
+
     // 2. Rekn ut for i dag
     const today = new Date();
-    const todayInfo = getEffectiveShiftForDate(today, shiftGroup, overrides);
+    const todayInfo = getEffectiveShiftForDate(today, shiftGroup, overrides, activePlan);
     const todayColor = getShiftColor(todayInfo.activeShift, isDark);
     const todayDateText = format(today, "d. MMM", { locale: nb });
 
@@ -53,7 +63,7 @@ export const updateHomeScreenWidget = async () => {
     const upcoming = [];
     for (let i = 1; i <= 3; i++) {
       const nextDate = addDays(today, i);
-      const nextInfo = getEffectiveShiftForDate(nextDate, shiftGroup, overrides);
+      const nextInfo = getEffectiveShiftForDate(nextDate, shiftGroup, overrides, activePlan);
       const nextColor = getShiftColor(nextInfo.activeShift, isDark);
       const dayLabel = i === 1 ? "I morgon" : format(nextDate, "EEE d.", { locale: nb });
 
