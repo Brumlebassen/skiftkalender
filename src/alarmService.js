@@ -1,5 +1,4 @@
 import { Platform, Alert } from "react-native";
-import * as Notifications from "expo-notifications";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { format, addDays, isPast } from "date-fns";
 import { nb } from "date-fns/locale";
@@ -23,17 +22,32 @@ export const DEFAULT_ALARM_CONFIG = {
 };
 
 /**
- * Sjekkar om Notifications-modulen er tilgjengeleg i dette bygget (f.eks. ikkje web eller manglande native module)
+ * Hent expo-notifications dynamisk så me unngår krasj på oppstart
+ * dersom modulen manglar i den noverande app-binæren (f.eks. i Expo Go eller eldre APK)
+ */
+let _notificationsModule = null;
+const getNotificationsModule = () => {
+  if (_notificationsModule) return _notificationsModule;
+  try {
+    _notificationsModule = require("expo-notifications");
+    return _notificationsModule;
+  } catch (err) {
+    console.warn("expo-notifications er ikkje tilgjengeleg i dette bygget:", err);
+    return null;
+  }
+};
+
+/**
+ * Sjekkar om Notifications-modulen er tilgjengeleg i dette bygget
  */
 export const isNotificationsAvailable = () => {
+  if (Platform.OS === "web") return false;
   try {
-    return (
-      Platform.OS !== "web" &&
-      Boolean(
-        Notifications &&
-        typeof Notifications.scheduleNotificationAsync === "function" &&
-        typeof Notifications.getPermissionsAsync === "function"
-      )
+    const mod = getNotificationsModule();
+    return Boolean(
+      mod &&
+      typeof mod.scheduleNotificationAsync === "function" &&
+      typeof mod.getPermissionsAsync === "function"
     );
   } catch {
     return false;
@@ -47,8 +61,9 @@ let isHandlerSet = false;
 export const ensureNotificationHandler = () => {
   if (isHandlerSet) return;
   try {
-    if (Notifications && typeof Notifications.setNotificationHandler === "function") {
-      Notifications.setNotificationHandler({
+    const mod = getNotificationsModule();
+    if (mod && typeof mod.setNotificationHandler === "function") {
+      mod.setNotificationHandler({
         handleNotification: async () => ({
           shouldShowAlert: true,
           shouldPlaySound: true,
@@ -70,18 +85,19 @@ export const setupNotificationChannel = async () => {
 
   try {
     ensureNotificationHandler();
-    if (Notifications?.setNotificationChannelAsync) {
-      await Notifications.setNotificationChannelAsync(ALARM_CHANNEL_ID, {
+    const mod = getNotificationsModule();
+    if (mod?.setNotificationChannelAsync) {
+      await mod.setNotificationChannelAsync(ALARM_CHANNEL_ID, {
         name: "Skiftalarm",
         description: "Automatiske alarmar og vekking tilpassa turnus",
-        importance: Notifications?.AndroidImportance?.MAX || 5,
+        importance: mod?.AndroidImportance?.MAX ?? 5,
         vibrationPattern: [0, 600, 300, 600, 300, 600],
         sound: "default",
         enableVibrate: true,
         showBadge: true,
         audioAttributes: {
-          usage: Notifications?.AndroidAudioUsage?.ALARM || 4,
-          contentType: Notifications?.AndroidAudioContentType?.SONIFICATION || 4,
+          usage: mod?.AndroidAudioUsage?.ALARM ?? 4,
+          contentType: mod?.AndroidAudioContentType?.SONIFICATION ?? 4,
         },
       });
     }
@@ -98,11 +114,14 @@ export const requestNotificationPermissions = async () => {
 
   try {
     await setupNotificationChannel();
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    const mod = getNotificationsModule();
+    if (!mod?.getPermissionsAsync) return false;
+
+    const { status: existingStatus } = await mod.getPermissionsAsync();
     let finalStatus = existingStatus;
 
-    if (existingStatus !== "granted") {
-      const { status } = await Notifications.requestPermissionsAsync({
+    if (existingStatus !== "granted" && mod?.requestPermissionsAsync) {
+      const { status } = await mod.requestPermissionsAsync({
         ios: {
           allowAlert: true,
           allowBadge: true,
@@ -194,10 +213,12 @@ export const rescheduleAllShiftAlarms = async ({
 
   try {
     ensureNotificationHandler();
+    const mod = getNotificationsModule();
+    if (!mod) return [];
 
     // 1. Avbryt tidlegare planlagde varsler
-    if (Notifications?.cancelAllScheduledNotificationsAsync) {
-      await Notifications.cancelAllScheduledNotificationsAsync();
+    if (mod?.cancelAllScheduledNotificationsAsync) {
+      await mod.cancelAllScheduledNotificationsAsync();
     }
 
     // Viss hovudbrytar er slått av, stoppar me her
@@ -225,10 +246,10 @@ export const rescheduleAllShiftAlarms = async ({
     for (const item of upcoming) {
       if (item.alarmActive && item.alarmDateTime && !isPast(item.alarmDateTime)) {
         try {
-          const triggerType = Notifications?.SchedulableTriggerInputTypes?.DATE || "date";
-          const priorityVal = Notifications?.AndroidNotificationPriority?.MAX || "max";
+          const triggerType = mod?.SchedulableTriggerInputTypes?.DATE || "date";
+          const priorityVal = mod?.AndroidNotificationPriority?.MAX || "max";
 
-          const id = await Notifications.scheduleNotificationAsync({
+          const id = await mod.scheduleNotificationAsync({
             content: {
               title: `⏰ Vekkeklokke (${item.shift})`,
               body: `Tid for å stå opp! Vakta di (${item.shift}) er registrert i dag.`,
@@ -280,10 +301,13 @@ export const triggerTestAlarm = async () => {
 
   try {
     ensureNotificationHandler();
-    const triggerType = Notifications?.SchedulableTriggerInputTypes?.TIME_INTERVAL || "timeInterval";
-    const priorityVal = Notifications?.AndroidNotificationPriority?.MAX || "max";
+    const mod = getNotificationsModule();
+    if (!mod?.scheduleNotificationAsync) return false;
 
-    await Notifications.scheduleNotificationAsync({
+    const triggerType = mod?.SchedulableTriggerInputTypes?.TIME_INTERVAL || "timeInterval";
+    const priorityVal = mod?.AndroidNotificationPriority?.MAX || "max";
+
+    await mod.scheduleNotificationAsync({
       content: {
         title: "⏰ Test-vekkeklokke: Skiftkalender",
         body: "Dette er slik skiftalarmen din høyrest ut!",

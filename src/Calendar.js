@@ -913,7 +913,7 @@ const Calendar = ({ isDark, toggleTheme }) => {
                       </Text>
                     );
                   }
-                  const sc = alarmConfig.shifts?.[effective];
+                  const sc = alarmConfig.times?.[effective];
                   if (sc?.enabled && sc?.time) {
                     return (
                       <Text style={[styles.modalTimeText, { color: isDark ? "#93c5fd" : "#2563eb", fontWeight: "600", marginTop: 4 }]}>
