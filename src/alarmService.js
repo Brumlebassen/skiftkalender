@@ -6,7 +6,7 @@ import { nb } from "date-fns/locale";
 import { getEffectiveShiftForDate } from "./shiftCalculator";
 
 export const SHIFT_ALARM_CONFIG_KEY = "@shiftAlarmConfig";
-export const ALARM_CHANNEL_ID = "shift-alarms";
+export const ALARM_CHANNEL_ID = "shift-alarms-v2";
 
 export const DEFAULT_ALARM_CONFIG = {
   enabled: false,
@@ -99,11 +99,13 @@ export const setupNotificationChannel = async () => {
       await mod.setNotificationChannelAsync(ALARM_CHANNEL_ID, {
         name: "Skiftalarm",
         description: "Automatiske alarmar og vekking tilpassa turnus",
-        importance: mod?.AndroidImportance?.MAX ?? 5,
+        importance: mod?.AndroidImportance?.MAX ?? 7,
         vibrationPattern: [0, 600, 300, 600, 300, 600],
         sound: "default",
         enableVibrate: true,
         showBadge: true,
+        bypassDnd: true,
+        lockscreenVisibility: mod?.AndroidNotificationVisibility?.PUBLIC ?? 1,
         audioAttributes: {
           usage: mod?.AndroidAudioUsage?.ALARM ?? 4,
           contentType: mod?.AndroidAudioContentType?.SONIFICATION ?? 4,
