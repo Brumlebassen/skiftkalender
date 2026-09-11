@@ -1,4 +1,5 @@
 import { Platform, Alert } from "react-native";
+import { isRunningInExpoGo } from "expo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { format, addDays, isPast } from "date-fns";
 import { nb } from "date-fns/locale";
@@ -27,12 +28,20 @@ export const DEFAULT_ALARM_CONFIG = {
  */
 let _notificationsModule = null;
 const getNotificationsModule = () => {
+  if (Platform.OS === "web") return null;
+
+  // Frå SDK 53 støttar ikkje Expo Go varslingar på Android
+  try {
+    if (typeof isRunningInExpoGo === "function" && isRunningInExpoGo()) {
+      return null;
+    }
+  } catch {}
+
   if (_notificationsModule) return _notificationsModule;
   try {
     _notificationsModule = require("expo-notifications");
     return _notificationsModule;
   } catch (err) {
-    console.warn("expo-notifications er ikkje tilgjengeleg i dette bygget:", err);
     return null;
   }
 };
@@ -283,9 +292,16 @@ export const rescheduleAllShiftAlarms = async ({
  */
 export const triggerTestAlarm = async () => {
   if (!isNotificationsAvailable()) {
+    let inExpoGo = false;
+    try {
+      inExpoGo = typeof isRunningInExpoGo === "function" && isRunningInExpoGo();
+    } catch {}
+
     Alert.alert(
-      "Krev nytt app-bygg",
-      "Vekkeklokke og alarm-varsler krev eit nytt APK-bygg med varslingsstøtte. Bygg ny versjon med 'eas build' for å ta denne funksjonen i bruk på telefonen."
+      inExpoGo ? "Expo Go støttar ikkje alarmar" : "Krev nytt app-bygg (APK)",
+      inExpoGo
+        ? "Frå SDK 53 fjerna Expo støtte for Android-varslingar i Expo Go. Vekkeklokke og heimeskjerm-widget krev ein eigen APK (med 'eas build')."
+        : "Vekkeklokke og alarm-varsler krev eit nytt APK-bygg med varslingsstøtte. Bygg ny versjon med 'eas build'."
     );
     return false;
   }

@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { getShiftColor } from "./theme";
+import { isRunningInExpoGo } from "expo";
 import {
   calculateUpcomingAlarms,
   triggerTestAlarm,
@@ -143,6 +144,36 @@ const AlarmModal = ({
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false}>
+            {(() => {
+              let inExpoGo = false;
+              try {
+                inExpoGo = typeof isRunningInExpoGo === "function" && isRunningInExpoGo();
+              } catch {}
+              if (!inExpoGo) return null;
+              return (
+                <View
+                  style={{
+                    backgroundColor: isDark ? "#451a03" : "#fef3c7",
+                    borderColor: isDark ? "#78350f" : "#fde68a",
+                    borderWidth: 1,
+                    padding: 10,
+                    borderRadius: 8,
+                    marginBottom: 12,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      color: isDark ? "#fde68a" : "#92400e",
+                      lineHeight: 17,
+                    }}
+                  >
+                    ℹ️ <Text style={{ fontWeight: "bold" }}>Expo Go:</Text> Frå SDK 53 støttar ikkje Expo Go bakgrunnsalarmar på Android. Vekkeklokke og widgets fungerer fullt ut i ein eigen APK (med "eas build").
+                  </Text>
+                </View>
+              );
+            })()}
+
             {/* HOVUDBRYTAR */}
             <View style={[styles.masterSwitchBox, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder }]}>
               <View style={{ flex: 1, paddingRight: 10 }}>
