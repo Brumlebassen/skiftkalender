@@ -222,6 +222,7 @@ export const SHIFT_TIMES_KEY = "@shiftTimes";
 export const COMPARE_SHIFTS_KEY = "@compareShifts";
 export const ACTIVE_SHIFT_PLAN_KEY = "@activeShiftPlan";
 export const CUSTOM_SHIFT_PLANS_KEY = "@customShiftPlans";
+export const CALENDAR_ZOOM_KEY = "@calendarZoomScale";
 
 export const ALL_SHIFTS = ["Fm", "Em", "N", "12tFm", "12tN", "Fri"];
 
